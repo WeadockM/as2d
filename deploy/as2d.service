@@ -1,0 +1,32 @@
+[Unit]
+Description=AS2 receiving daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=as2d
+Group=as2d
+ExecStart=/usr/local/bin/as2d -config /etc/as2d/config.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+
+# Hardening: the daemon only needs to read its config and write its archive.
+StateDirectory=as2d
+StateDirectoryMode=0750
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+/bin/
+/dev/
+/examples/certs/
+/examples/data/
+*.key
+*.pass

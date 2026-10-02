@@ -1,0 +1,18 @@
+{
+  "listen": "127.0.0.1:4180",
+  "public_url": "http://127.0.0.1:4180/as2",
+  "archive_dir": "data/partnerx/archive",
+  "inbox_dir": "data/partnerx/inbox",
+  "outbox_dir": "data/partnerx/outbox",
+  "spool_dir": "data/partnerx/spool",
+  "local": { "as2_id": "PARTNERX", "cert": "certs/PARTNERX.crt", "key": "certs/PARTNERX.key" },
+  "partners": [
+    {
+      "as2_id": "MYCOMPANY",
+      "cert": "certs/MYCOMPANY.crt",
+      "require_encryption": true,
+      "require_signature": true,
+      "outbound": { "url": "http://127.0.0.1:4080/as2", "cipher": "aes128-gcm", "mdn": "async" }
+    }
+  ]
+}

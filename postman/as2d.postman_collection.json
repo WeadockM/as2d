@@ -1,0 +1,371 @@
+{
+  "info": {
+    "name": "as2d",
+    "description": "Requests for testing the as2d inbound AS2 receiver locally.\n\nStart the daemon first:\n\n    go run ./cmd/as2d -config examples/config.json\n\nAll requests send plain (unsigned, unencrypted) payloads. Postman cannot build S/MIME signatures or encryption, so signed and encrypted messages are covered by `go test ./...` instead.\n\nThe `{{as2From}}` partner must NOT have require_signature or require_encryption set, or the success requests will get an insufficient-message-security MDN. examples/config.json is set up that way.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:4080" },
+    { "key": "as2From", "value": "PARTNERX" },
+    { "key": "as2To", "value": "MYCOMPANY" },
+    { "key": "asyncMdnUrl", "value": "https://postman-echo.com/post" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Every message needs a unique Message-ID.",
+          "pm.variables.set('messageId', '<postman-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '@postman>');"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health check",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/healthz"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('daemon is up', () => {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.text().trim()).to.eql('ok');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Receive",
+      "item": [
+        {
+          "name": "Message with sync MDN",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "application/edi-x12" },
+              { "key": "Content-Disposition", "value": "attachment; filename=\"po.edi\"" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" },
+              { "key": "Subject", "value": "Postman test" },
+              { "key": "Disposition-Notification-To", "value": "mailto:as2@partner.example" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "ISA*00*          *00*          *ZZ*PARTNERX       *ZZ*MYCOMPANY      *261001*1200*U*00401*000000001*0*T*>~"
+            },
+            "description": "Plain message asking for an unsigned MDN in the HTTP response. The payload is archived as payload/po.edi."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('MDN is a multipart/report', () => {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('multipart/report');",
+                  "});",
+                  "pm.test('MDN reports success', () => {",
+                  "    pm.expect(pm.response.text()).to.include('Disposition: automatic-action/MDN-sent-automatically; processed\\r\\n');",
+                  "});",
+                  "pm.test('MDN carries a MIC', () => pm.expect(pm.response.text()).to.match(/Received-Content-MIC: \\S+, sha-256/));",
+                  "pm.test('MDN is addressed back to the sender', () => {",
+                  "    pm.expect(pm.response.headers.get('AS2-To')).to.eql(pm.variables.get('as2From'));",
+                  "    pm.expect(pm.response.headers.get('AS2-From')).to.eql(pm.variables.get('as2To'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Message with signed sync MDN",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "application/edi-x12" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" },
+              { "key": "Disposition-Notification-To", "value": "mailto:as2@partner.example" },
+              { "key": "Disposition-Notification-Options", "value": "signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha-256, sha1" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "Signed MDN test payload"
+            },
+            "description": "Asks for an MDN signed with the local station's key. The response is multipart/signed: the report followed by a base64 PKCS#7 signature."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('MDN is signed with SHA-256', () => {",
+                  "    const ct = pm.response.headers.get('Content-Type');",
+                  "    pm.expect(ct).to.include('multipart/signed');",
+                  "    pm.expect(ct).to.include('micalg=sha-256');",
+                  "});",
+                  "pm.test('MDN includes a PKCS#7 signature', () => pm.expect(pm.response.text()).to.include('application/pkcs7-signature'));",
+                  "pm.test('MDN reports success', () => pm.expect(pm.response.text()).to.include('; processed\\r\\n'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Message with SHA-1 MIC",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "text/plain" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" },
+              { "key": "Disposition-Notification-To", "value": "mailto:as2@partner.example" },
+              { "key": "Disposition-Notification-Options", "value": "signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha1" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "SHA-1 MIC test payload"
+            },
+            "description": "Older partners often ask for SHA-1. The MIC and the MDN signature should both use it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('MIC uses the requested algorithm', () => pm.expect(pm.response.text()).to.match(/Received-Content-MIC: \\S+, sha1/));",
+                  "pm.test('MDN signature uses SHA-1', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('micalg=sha-1'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Message without MDN",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "application/octet-stream" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "No receipt requested"
+            },
+            "description": "No Disposition-Notification-To header, so the message is archived and the response is an empty 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no MDN in the body', () => pm.expect(pm.response.text()).to.eql(''));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Message with async MDN",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "application/edi-x12" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" },
+              { "key": "Disposition-Notification-To", "value": "mailto:as2@partner.example" },
+              { "key": "Disposition-Notification-Options", "value": "signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha-256" },
+              { "key": "Receipt-Delivery-Option", "value": "{{asyncMdnUrl}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "Async MDN test payload"
+            },
+            "description": "The daemon answers with an empty 200 and POSTs the MDN to {{asyncMdnUrl}} in the background. Check the daemon's log for \"asynchronous MDN sent\". Point asyncMdnUrl at a request catcher you control (e.g. a webhook.site URL) to see the MDN itself; the default, postman-echo.com, just accepts it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('MDN is not in the response', () => pm.expect(pm.response.text()).to.eql(''));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rejections",
+      "item": [
+        {
+          "name": "Unknown partner (403)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "text/plain" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "STRANGER" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" },
+              { "key": "Disposition-Notification-To", "value": "mailto:as2@partner.example" }
+            ],
+            "body": { "mode": "raw", "raw": "Should be rejected" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('error names the problem', () => pm.expect(pm.response.text()).to.include('not a configured partner'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong recipient (403)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "text/plain" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "SOMEONE_ELSE" },
+              { "key": "Message-ID", "value": "{{messageId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "Should be rejected" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('error names the problem', () => pm.expect(pm.response.text()).to.include('does not match the local station'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing Message-ID (400)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "text/plain" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" }
+            ],
+            "body": { "mode": "raw", "raw": "Should be rejected" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET instead of POST (405)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/as2"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 405', () => pm.response.to.have.status(405));",
+                  "pm.test('Allow header lists POST', () => pm.expect(pm.response.headers.get('Allow')).to.eql('POST'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Garbage encrypted body (error MDN)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/as2",
+            "header": [
+              { "key": "Content-Type", "value": "application/pkcs7-mime; smime-type=enveloped-data; name=smime.p7m" },
+              { "key": "AS2-Version", "value": "1.2" },
+              { "key": "AS2-From", "value": "{{as2From}}" },
+              { "key": "AS2-To", "value": "{{as2To}}" },
+              { "key": "Message-ID", "value": "{{messageId}}" },
+              { "key": "Disposition-Notification-To", "value": "mailto:as2@partner.example" }
+            ],
+            "body": { "mode": "raw", "raw": "this is not a PKCS#7 envelope" },
+            "description": "The partner is identified, so instead of an HTTP error the daemon returns a 200 with an MDN reporting decryption-failed. The raw request is still archived, without a payload."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('MDN reports decryption-failed', () => {",
+                  "    pm.expect(pm.response.text()).to.include('processed/error: decryption-failed');",
+                  "});",
+                  "pm.test('no MIC on a failed message', () => pm.expect(pm.response.text()).to.not.include('Received-Content-MIC'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

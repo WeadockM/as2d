@@ -1,0 +1,11 @@
+{
+  "archive_dir": "data/as2send",
+  "local": { "as2_id": "PARTNERX", "cert": "certs/PARTNERX.crt", "key": "certs/PARTNERX.key" },
+  "partners": [
+    {
+      "as2_id": "MYCOMPANY",
+      "cert": "certs/MYCOMPANY.crt",
+      "outbound": { "url": "http://127.0.0.1:4080/as2", "mdn": "sync" }
+    }
+  ]
+}

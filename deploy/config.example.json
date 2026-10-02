@@ -1,0 +1,47 @@
+{
+  "listen": ":4080",
+  "path": "/as2",
+  "public_url": "https://as2.mycompany.example/as2",
+
+  "archive_dir": "/var/lib/as2d/archive",
+  "spool_dir": "/var/lib/as2d/spool",
+
+  "api_listen": "0.0.0.0:4090",
+  "api_token": "replace-with-a-long-random-token",
+  "api_tls_cert": "certs/api.crt",
+  "api_tls_key": "certs/api.key",
+
+  "status_webhook": {
+    "url": "https://atom-host:9093/ws/simple/as2Status",
+    "username": "boomi-user@account-XXXX",
+    "password_file": "boomi.pass"
+  },
+
+  "local": {
+    "as2_id": "MYCOMPANY",
+    "cert": "certs/MYCOMPANY.crt",
+    "key": "certs/MYCOMPANY.key"
+  },
+  "partners": [
+    {
+      "as2_id": "PARTNERX",
+      "cert": "partners/PARTNERX.crt",
+      "require_encryption": true,
+      "require_signature": true,
+      "outbound": {
+        "url": "https://as2.partnerx.example/as2",
+        "cipher": "aes256-cbc",
+        "micalg": "sha-256",
+        "compress": "before-sign",
+        "mdn": "sync"
+      },
+      "forward": {
+        "url": "https://atom-host:9093/ws/simple/executeInboundAS2",
+        "username": "boomi-user@account-XXXX",
+        "password_file": "boomi.pass",
+        "timeout": "60s",
+        "mode": "queued"
+      }
+    }
+  ]
+}
