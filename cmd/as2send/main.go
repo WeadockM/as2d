@@ -26,6 +26,7 @@ import (
 	"github.com/WeadockM/as2d/internal/as2"
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/outbound"
+	"github.com/WeadockM/as2d/internal/version"
 )
 
 type flags struct {
@@ -52,7 +53,12 @@ func main() {
 	flag.StringVar(&f.compress, "compress", "", "none, before-sign or after-sign")
 	flag.StringVar(&f.asyncListen, "async-listen", "127.0.0.1:4081", "address to receive an asynchronous MDN on when no async_mdn_url is configured")
 	flag.DurationVar(&f.timeout, "timeout", 2*time.Minute, "how long to wait for the response and any asynchronous MDN")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("as2send", version.String())
+		return
+	}
 	f.set = map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { f.set[fl.Name] = true })
 

@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/WeadockM/as2d/internal/version"
 )
 
 func main() {
@@ -22,7 +24,12 @@ func main() {
 	out := flag.String("out", ".", "directory to write <id>.crt and <id>.key to")
 	bits := flag.Int("bits", 3072, "RSA key size")
 	days := flag.Int("days", 730, "validity period in days")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("as2keygen", version.String())
+		return
+	}
 	if *id == "" {
 		flag.Usage()
 		os.Exit(2)

@@ -1,6 +1,12 @@
 # as2d
 
+[![Release](https://img.shields.io/github/v/release/WeadockM/as2d?sort=semver)](https://github.com/WeadockM/as2d/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/WeadockM/as2d)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A small AS2 (RFC 4130) daemon for Linux that both receives and sends.
+
+![The as2d dashboard: a list of messages received from and sent to partners, with their status](docs/images/dashboard-messages.png)
 
 - **Inbound:** decrypts, decompresses and verifies each message against the
   partner's certificate, archives it, drops the payload into an inbox
@@ -38,6 +44,15 @@ This builds `as2d` (the daemon), `as2send` (one-off sends for testing) and
 ```sh
 go install github.com/WeadockM/as2d/cmd/...@latest
 ```
+
+`as2d -version` prints the version. Binaries installed with `go install`
+report it automatically; for builds from a checkout, stamp it like this:
+
+```sh
+go build -ldflags "-X github.com/WeadockM/as2d/internal/version.Version=v0.2.0" -o bin/ ./cmd/...
+```
+
+Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install on Linux
 
@@ -264,6 +279,8 @@ needs no C libraries. Keep the index on local disk, not a network share.
 When `api_listen` is set, the same port serves a browser dashboard, e.g.
 `http://127.0.0.1:4090/`:
 
+![Message detail: security, MDN result and the archived files](docs/images/dashboard-message.png)
+
 - **Messages:** everything received and sent, newest first. Search by file
   name, Message-ID, subject or correlation ID, and filter by direction,
   partner, state and date.
@@ -347,6 +364,11 @@ where a token is otherwise not required.
 - Multiple local AS2 IDs, or separate signing and encryption certificates
 - HTTP authentication or custom TLS trust when sending to partners
 - Certificate rollover (two valid certificates per partner at once)
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Please don't open
+a public issue for it.
 
 ## License
 

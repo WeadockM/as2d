@@ -25,13 +25,19 @@ import (
 	"github.com/WeadockM/as2d/internal/index"
 	"github.com/WeadockM/as2d/internal/outbound"
 	"github.com/WeadockM/as2d/internal/server"
+	"github.com/WeadockM/as2d/internal/version"
 	"github.com/WeadockM/as2d/internal/web"
 )
 
 func main() {
 	configPath := flag.String("config", "/etc/as2d/config.json", "path to the configuration file")
 	reindex := flag.Bool("reindex", false, "rebuild the message index from the archive, then exit")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("as2d", version.String())
+		return
+	}
 
 	// systemd's journal records timestamps, and stderr is where it reads from.
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -156,7 +162,7 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 		w.Write([]byte("ok\n"))
 	})
 	serve("as2", cfg.Listen, mux, cfg.TLSCert, cfg.TLSKey, 5*time.Minute)
-	log.Info("started", "local", cfg.Local.AS2ID, "partners", len(cfg.Partners), "path", cfg.Path,
+	log.Info("started", "version", version.String(), "local", cfg.Local.AS2ID, "partners", len(cfg.Partners), "path", cfg.Path,
 		"inbox", cfg.InboxDir, "outbox", cfg.OutboxDir)
 
 	var runErr error
