@@ -34,8 +34,19 @@ go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean
 
 ## If a release fails
 
-- **"CHANGELOG.md has no section for X.Y.Z":** add the section, commit, then
-  move the tag to the new commit and push it again:
-  `git tag -fa vX.Y.Z -m "as2d vX.Y.Z" && git push -f origin vX.Y.Z`.
+**Don't move or delete a tag once it is pushed.** Go's module mirror
+permanently records the code behind a version the first time anyone fetches
+it, so changing what a tag points to can break `go install ...@vX.Y.Z` for
+everyone with a checksum error. Instead, fix the problem, add a section for
+the next patch version to `CHANGELOG.md` (noting that the failed tag was not
+released), and tag that.
+
+- **"CHANGELOG.md has no section for X.Y.Z":** the release stops before
+  building anything. Add the changelog section and release the next patch
+  version.
 - **Permission errors creating the release:** in the repository settings,
-  under Actions → General → Workflow permissions, allow read and write.
+  under Actions → General → Workflow permissions, allow read and write, then
+  re-run the failed workflow from the Actions tab. A re-run uses the same
+  tag, which is fine because the tag itself did not change.
+- **Anything else:** the GoReleaser step's log is on the Actions tab (it
+  needs you to be signed in to GitHub).

@@ -7,7 +7,11 @@ change configuration or APIs; any such change is called out below.
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-10-03
+## [0.2.2] - 2026-10-03
+
+The `v0.2.1` tag exists, but its release build failed, so nothing was
+published under it. This release contains those changes plus the fix to the
+release workflow.
 
 ### Security
 - Built with Go 1.26.8. Versions 0.1.0 and 0.2.0 were built with Go 1.26.1,
@@ -69,7 +73,7 @@ First release.
   Services Server listener, in `queued` or `before_mdn` mode.
 - `as2send` for one-off test sends, and `as2keygen` for certificates.
 
-[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/WeadockM/as2d/compare/v0.2.0...v0.2.1
+[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/WeadockM/as2d/compare/v0.2.0...v0.2.2
 [0.2.0]: https://github.com/WeadockM/as2d/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/WeadockM/as2d/releases/tag/v0.1.0

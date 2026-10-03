@@ -28,15 +28,18 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # The notes are written outside the checkout: GoReleaser refuses to
+      # release from a working tree with untracked files.
       - name: Release notes from CHANGELOG.md
         run: |
+          notes="$RUNNER_TEMP/release-notes.md"
           version="${GITHUB_REF_NAME#v}"
           awk -v heading="## [$version]" '
             index($0, heading) == 1 { found = 1; next }
             found && /^## \[/       { exit }
             found                   { print }
-          ' CHANGELOG.md > release-notes.md
-          if ! grep -q '[^[:space:]]' release-notes.md; then
+          ' CHANGELOG.md > "$notes"
+          if ! grep -q '[^[:space:]]' "$notes"; then
             echo "::error::CHANGELOG.md has no section for $version. Add one before tagging."
             exit 1
           fi
@@ -45,13 +48,13 @@ jobs:
             echo "Each archive contains as2d, as2send and as2keygen, plus the README, LICENSE, CHANGELOG, systemd unit and example configuration. Check downloads against \`SHA256SUMS\`."
             echo
             echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md"
-          } >> release-notes.md
-          cat release-notes.md
+          } >> "$notes"
+          cat "$notes"
 
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean --release-notes release-notes.md
+          args: release --clean --release-notes ${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
