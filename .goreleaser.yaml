@@ -47,8 +47,9 @@ archives:
 checksum:
   name_template: SHA256SUMS
 
-changelog:
-  disable: true # the notes come from CHANGELOG.md
+# The release notes come from CHANGELOG.md: the workflow passes them with
+# --release-notes, and GoReleaser then uses them instead of listing commits.
+# Don't set changelog.disable: that also discards the --release-notes file.
 
 release:
   prerelease: auto

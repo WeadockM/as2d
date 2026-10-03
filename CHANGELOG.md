@@ -7,6 +7,10 @@ change configuration or APIs; any such change is called out below.
 
 ## [Unreleased]
 
+### Fixed
+- Release pages include the notes from this changelog. The v0.2.2 release
+  was published without them because of a release configuration mistake.
+
 ## [0.2.2] - 2026-10-03
 
 The `v0.2.1` tag exists, but its release build failed, so nothing was
