@@ -19,22 +19,23 @@ const settle = 3 * time.Second
 // writers can create a file under such a name and rename it when complete.
 // Files that cannot be queued are moved to <dir>/<partner>/rejected/.
 func (m *Manager) WatchOutbox(ctx context.Context, dir string, interval time.Duration) {
-	folders := map[string]string{} // folder path -> partner ID
-	for id := range m.cfg.Partners {
-		path := filepath.Join(dir, archive.SafeName(id))
-		if err := os.MkdirAll(path, 0o750); err != nil {
-			m.cfg.Log.Error("cannot create outbox folder", "dir", path, "err", err)
-			continue
-		}
-		folders[path] = id
-	}
-	m.cfg.Log.Info("watching outbox", "dir", dir, "partners", len(folders))
-
+	m.cfg.Log.Info("watching outbox", "dir", dir)
+	created := map[string]bool{} // folders already made
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
-		for path, partner := range folders {
-			m.scanOutbox(path, partner)
+		// Partners can be added and removed while running, so the folder
+		// list is worked out again on every scan.
+		for _, id := range m.partnerIDs() {
+			path := filepath.Join(dir, archive.SafeName(id))
+			if !created[path] {
+				if err := os.MkdirAll(path, 0o750); err != nil {
+					m.cfg.Log.Error("cannot create outbox folder", "dir", path, "err", err)
+					continue
+				}
+				created[path] = true
+			}
+			m.scanOutbox(path, id)
 		}
 		select {
 		case <-ctx.Done():

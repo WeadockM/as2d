@@ -6,3 +6,7 @@
 *.pass
 /dist/
 *.db
+
+# Dashboard state: accounts, audit log, partners and their certificates.
+# In production it lives in /var/lib/as2d; never commit a copy.
+state/

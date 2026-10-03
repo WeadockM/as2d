@@ -350,6 +350,8 @@ const actionLabel = {
   password_change: 'changed password', password_change_failed: 'failed password change',
   user_create: 'created user', user_role: 'changed role', user_disable: 'disabled user', user_enable: 'enabled user',
   user_password_reset: 'reset password', message_send: 'sent a file', message_retry: 'retried a message',
+  partner_create: 'added partner', partner_update: 'changed partner', partner_delete: 'deleted partner',
+  partner_import: 'imported partner', partner_restore: 'restored partner version',
 };
 
 async function auditPage(params) {
@@ -639,17 +641,42 @@ function certBlock(c, downloadHref) {
     h('dt', {}, ''), h('dd', {}, h('a', { class: 'button small', href: downloadHref, download: '' }, 'Download certificate')));
 }
 
-async function partnersPage() {
+async function partnersPage(params) {
   const data = await loadPartners();
   const local = data.local;
+  const edit = can('admin') && data.editable;
+  const notice = h('div');
+  if (params && params.get('saved')) notice.replaceChildren(alertBox('info', null, `Saved ${params.get('saved')}. The change is already in effect.`));
+
+  const importPartner = async (id, btn) => {
+    if (!confirm(`Import ${id} into the dashboard? From then on the dashboard's copy is used, and you should remove ${id} from config.json.`)) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/partners/${encodeURIComponent(id)}/import`, { method: 'POST' });
+      go('partners', new URLSearchParams({ saved: id }));
+    } catch (err) { btn.disabled = false; notice.replaceChildren(alertBox('bad', null, err.message)); }
+  };
 
   const cards = data.partners.map(p => {
     const o = p.outbound;
     const f = p.forward;
+    const source = p.source === 'dashboard'
+      ? h('span', { class: 'badge info', title: p.updated ? `Version ${p.version}, changed ${fmtTime(p.updated)} by ${p.updated_by}` : '' }, 'dashboard')
+      : h('span', { class: 'badge', title: 'Defined in config.json' }, 'config file');
+    let action = null;
+    if (edit && p.source === 'dashboard') action = h('a', { class: 'button small', href: `#/partners/${encodeURIComponent(p.id)}/edit` }, 'Edit');
+    if (edit && p.source === 'config') {
+      const btn = h('button', { class: 'small', onclick: () => importPartner(p.id, btn) }, 'Import to dashboard');
+      action = btn;
+    }
     return h('div', { class: 'card pad' },
       h('div', { class: 'partner-head' },
-        h('h2', {}, p.id),
-        h('a', { href: `#/messages?partner=${encodeURIComponent(p.id)}` }, 'Messages →')),
+        h('div', {}, h('h2', {}, p.id),
+          h('div', { class: 'chips' }, source,
+            p.updated ? h('span', { class: 'secondary' }, `v${p.version} · ${fmtTime(p.updated)} · ${p.updated_by}`) : null)),
+        h('div', { class: 'chips' },
+          h('a', { href: `#/messages?partner=${encodeURIComponent(p.id)}` }, 'Messages →'), action)),
+      p.also_in_config ? alertBox('warn', null, `${p.id} is also in config.json. The dashboard's version is used; remove it from config.json.`) : null,
       h('dl', { class: 'props' },
         h('dt', {}, 'Receiving'), h('dd', {}, h('div', { class: 'chips' },
           p.require_encryption ? h('span', { class: 'badge' }, 'requires encryption') : null,
@@ -673,7 +700,12 @@ async function partnersPage() {
   const warnings = [local.cert, ...data.partners.map(p => p.cert)].filter(c => c && c.status !== 'ok');
   render(
     h('div', { class: 'page-head' },
-      h('div', {}, h('h1', {}, 'Partners'), h('p', { class: 'sub' }, 'Your station and the partners it trades with. Edit them in the configuration file.'))),
+      h('div', {}, h('h1', {}, 'Partners'), h('p', { class: 'sub' },
+        edit ? 'Your station and the partners it trades with. Changes take effect immediately.'
+          : 'Your station and the partners it trades with.')),
+      edit ? h('a', { class: 'button primary', href: '#/partners/new' }, 'Add partner') : null),
+    notice,
+    can('admin') && !data.editable ? alertBox('info', null, 'To add and edit partners here, set state_dir in config.json and restart. Until then, partners are edited in config.json.') : null,
     warnings.length ? alertBox(warnings.some(c => c.status === 'expired') ? 'bad' : 'warn', 'Certificates need attention',
       'At least one certificate below has expired or expires within 30 days. Partners must receive a new certificate before the old one expires.') : null,
     h('div', { class: 'card pad stack' },
@@ -682,6 +714,178 @@ async function partnersPage() {
       certBlock(local.cert, '/api/certs/local.pem')),
     h('h2', { class: 'result' }, `Trading partners (${data.partners.length})`),
     data.partners.length ? h('div', { class: 'partners' }, cards) : h('div', { class: 'card empty' }, 'No partners configured.'));
+  clearInterval(refreshTimer);
+}
+
+// readCertificate returns a certificate file's contents as PEM text, or as
+// base64 for a binary (DER) file.
+async function readCertificate(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
+  if (text.includes('-----BEGIN')) return text;
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+}
+
+const ciphers = [['aes256-cbc', 'AES-256-CBC'], ['aes128-cbc', 'AES-128-CBC'], ['aes256-gcm', 'AES-256-GCM'], ['aes128-gcm', 'AES-128-GCM']];
+const micalgs = [['sha-256', 'SHA-256'], ['sha-384', 'SHA-384'], ['sha-512', 'SHA-512'], ['sha-1', 'SHA-1 (legacy)']];
+
+// partnerForm adds a partner (id empty) or edits a dashboard partner.
+async function partnerForm(id) {
+  const data = partnerCache || await loadPartners();
+  if (!can('admin') || !data.editable) { go('partners'); return; }
+  let p = null, history = [];
+  if (id) {
+    p = (await api(`/api/partners/${encodeURIComponent(id)}`)).data.partner;
+    if (p.source !== 'dashboard') { go('partners'); return; }
+    history = (await api(`/api/partners/${encodeURIComponent(id)}/history`)).data;
+  }
+  const o = p && p.outbound;
+  const msg = h('div');
+  const field = (label, input, hint) => h('div', { class: 'field' }, h('label', { for: input.id }, label), input, hint ? h('div', { class: 'hint' }, hint) : null);
+  const check = (id_, label, checked) => {
+    const box = h('input', { type: 'checkbox', id: id_, checked });
+    return [box, h('label', { class: 'check' }, box, label)];
+  };
+  const select = (id_, options, value) => h('select', { id: id_ }, options.map(([v, l]) => h('option', { value: v, selected: v === value }, l)));
+
+  const as2id = h('input', { type: 'text', id: 'as2id', required: true, value: p ? p.id : '', disabled: !!p, maxlength: '128', autocomplete: 'off' });
+
+  // Certificate: file or paste, previewed by the server before saving.
+  let certificate = '';
+  const certPreview = h('div');
+  const certFile = h('input', { type: 'file', id: 'certfile', accept: '.crt,.cer,.pem,.der' });
+  const certText = h('textarea', { id: 'certtext', rows: '4', placeholder: '…or paste the certificate (-----BEGIN CERTIFICATE----- …)', class: 'mono' });
+  const preview = async (value) => {
+    certificate = value.trim();
+    certPreview.replaceChildren();
+    if (!certificate) return;
+    try {
+      const { data: c } = await api('/api/certificates/inspect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ certificate }) });
+      certPreview.replaceChildren(alertBox(c.status === 'ok' ? 'info' : 'warn', 'Check this fingerprint with the partner, e.g. by phone, before saving.',
+        h('dl', { class: 'props' },
+          h('dt', {}, 'Subject'), h('dd', {}, c.subject),
+          h('dt', {}, 'Valid'), h('dd', {}, `${fmtDate(c.not_before)} to ${fmtDate(c.not_after)} `, badge(c.status, c.status === 'ok' ? `${c.days_left} days left` : c.status)),
+          h('dt', {}, 'SHA-256'), h('dd', { class: 'mono' }, c.sha256.match(/.{1,2}/g).join(':')))));
+    } catch (err) {
+      certificate = '';
+      if (!(err instanceof AuthError)) certPreview.replaceChildren(alertBox('bad', null, err.message));
+    }
+  };
+  certFile.addEventListener('change', async () => { if (certFile.files[0]) { certText.value = ''; await preview(await readCertificate(certFile.files[0])); } });
+  certText.addEventListener('change', () => { certFile.value = ''; preview(certText.value); });
+
+  const [reqEnc, reqEncL] = check('reqenc', 'Require encryption', p ? p.require_encryption : true);
+  const [reqSig, reqSigL] = check('reqsig', 'Require a signature', p ? p.require_signature : true);
+
+  // Sending.
+  const [sends, sendsL] = check('sends', 'Send files to this partner', !!o);
+  const url = h('input', { type: 'text', id: 'url', value: o ? o.url : '', placeholder: 'https://as2.partner.example/as2' });
+  const [enc, encL] = check('enc', 'Encrypt', o ? o.encrypt : true);
+  const [sig, sigL] = check('sig', 'Sign', o ? o.sign : true);
+  const [smdn, smdnL] = check('smdn', 'Ask for a signed MDN', o ? o.signed_mdn : true);
+  const cipher = select('cipher', ciphers, o ? o.cipher : 'aes256-cbc');
+  const micalg = select('micalg', micalgs, o ? o.micalg : 'sha-256');
+  const compress = select('compress', [['none', 'No compression'], ['before-sign', 'Compress before signing'], ['after-sign', 'Compress after signing']], o ? o.compress : 'none');
+  const mdn = select('mdn', [['sync', 'Synchronous (in the HTTP response)'], ['async', 'Asynchronous (posted back later)'], ['none', 'No MDN']], o ? o.mdn : 'sync');
+  const asyncURL = h('input', { type: 'text', id: 'asyncurl', value: o ? (o.async_mdn_url || '') : '', placeholder: 'Leave empty to use public_url from config.json' });
+  const asyncField = field('Async MDN address', asyncURL);
+  const sendBox = h('div', { class: 'stack' },
+    field('Partner\'s AS2 URL', url),
+    h('div', { class: 'chips' }, encL, sigL, smdnL),
+    h('div', { class: 'form-row' }, field('Encryption', cipher), field('Signature / MIC', micalg)),
+    h('div', { class: 'form-row' }, field('Compression', compress), field('MDN', mdn)),
+    asyncField);
+  const toggle = () => { sendBox.hidden = !sends.checked; asyncField.hidden = mdn.value !== 'async'; };
+  sends.addEventListener('change', toggle);
+  mdn.addEventListener('change', toggle);
+  toggle();
+  if (!data.can_send) { sends.disabled = true; sends.checked = !!o; }
+
+  const save = h('button', { class: 'primary', type: 'submit' }, p ? 'Save changes' : 'Add partner');
+  const form = h('form', {
+    class: 'card pad form',
+    onsubmit: async e => {
+      e.preventDefault();
+      msg.replaceChildren();
+      if (!p && !certificate) { msg.replaceChildren(alertBox('bad', null, 'Add the partner\'s certificate.')); return; }
+      const body = {
+        as2_id: p ? p.id : as2id.value.trim(),
+        require_encryption: reqEnc.checked, require_signature: reqSig.checked,
+        certificate,
+        outbound: sends.checked ? {
+          url: url.value.trim(), encrypt: enc.checked, sign: sig.checked, signed_mdn: smdn.checked,
+          cipher: cipher.value, micalg: micalg.value, compress: compress.value, mdn: mdn.value, async_mdn_url: asyncURL.value.trim(),
+        } : null,
+      };
+      save.disabled = true;
+      try {
+        await api(p ? `/api/partners/${encodeURIComponent(p.id)}` : '/api/partners', {
+          method: p ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        partnerCache = null;
+        go('partners', new URLSearchParams({ saved: body.as2_id }));
+      } catch (err) {
+        if (!(err instanceof AuthError)) msg.replaceChildren(alertBox('bad', 'Not saved', err.message));
+        save.disabled = false;
+      }
+    },
+  },
+    msg,
+    h('h2', {}, 'Identity'),
+    field('AS2 ID', as2id, p ? 'The AS2 ID can\'t be changed. To use a different one, add a new partner.' : 'Exactly as the partner sends it in AS2-From. Case matters.'),
+    field(p ? 'Replace certificate' : 'Certificate', certFile, p ? 'Only if the partner has sent a new certificate. Leave empty to keep the current one.' : 'The partner\'s public certificate (.crt, .cer, .pem or .der).'),
+    certText, certPreview,
+    h('h2', { class: 'result' }, 'Receiving from this partner'),
+    h('div', { class: 'chips' }, reqEncL, reqSigL),
+    h('div', { class: 'hint' }, 'Messages that don\'t meet these requirements get an MDN reporting insufficient-message-security.'),
+    h('h2', { class: 'result' }, 'Sending to this partner'),
+    sendsL,
+    !data.can_send ? h('div', { class: 'hint' }, 'Sending needs spool_dir in config.json.') : null,
+    sendBox,
+    p && p.forward ? [h('h2', { class: 'result' }, 'Forward'),
+      h('p', { class: 'hint' }, `Received files are forwarded to ${p.forward.url} (${p.forward.mode}). Forward settings can't be edited here yet; they are kept as they are.`)] : null,
+    h('div', { class: 'chips result' }, save, h('a', { class: 'button', href: '#/partners' }, 'Cancel'),
+      p ? h('button', {
+        type: 'button', class: 'danger', onclick: async () => {
+          if (prompt(`Delete ${p.id}? Messages from it will be refused. Its history is kept, so it can be restored.\n\nType the AS2 ID to confirm:`) !== p.id) return;
+          try {
+            await api(`/api/partners/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+            partnerCache = null;
+            go('partners');
+          } catch (err) { if (!(err instanceof AuthError)) msg.replaceChildren(alertBox('bad', 'Not deleted', err.message)); }
+        },
+      }, 'Delete partner') : null));
+
+  const historyCard = history.length ? h('div', { class: 'card result' },
+    h('div', { class: 'pad' }, h('h2', {}, 'History'), h('p', { class: 'hint' }, 'Every saved version. Restoring one makes it the current version again, including its certificate.')),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'middle' },
+      h('thead', {}, h('tr', {}, ['Version', 'When', 'Who', 'Change', 'What changed', ''].map(t => h('th', {}, t)))),
+      h('tbody', {}, history.map((v, i) => h('tr', {},
+        h('td', {}, `v${v.version}`, i === 0 ? h('span', { class: 'secondary' }, ' (current)') : null),
+        h('td', { class: 'nowrap' }, fmtTime(v.updated)),
+        h('td', {}, v.updated_by),
+        h('td', {}, v.action),
+        h('td', { class: 'secondary' }, v.summary),
+        h('td', {}, i === 0 || v.action === 'deleted' ? null : h('button', {
+          class: 'small', onclick: async e => {
+            if (!confirm(`Restore version ${v.version} of ${p.id}? It takes effect immediately.`)) return;
+            e.target.disabled = true;
+            try {
+              await api(`/api/partners/${encodeURIComponent(p.id)}/history/${v.version}/restore`, { method: 'POST' });
+              partnerCache = null;
+              go('partners', new URLSearchParams({ saved: `${p.id} (restored version ${v.version})` }));
+            } catch (err) { e.target.disabled = false; msg.replaceChildren(alertBox('bad', null, err.message)); }
+          },
+        }, 'Restore')))))))) : null;
+
+  render(
+    h('p', {}, h('a', { href: '#/partners' }, '← Partners')),
+    h('h1', {}, p ? `Edit ${p.id}` : 'Add a partner'),
+    h('p', { class: 'sub' }, p ? `Version ${p.version}, last changed ${fmtTime(p.updated)} by ${p.updated_by}. Saving takes effect immediately.` : 'The partner can send to you as soon as it is saved.'),
+    form, historyCard);
+  (p ? reqEnc : as2id).focus();
   clearInterval(refreshTimer);
 }
 
@@ -773,7 +977,9 @@ async function route() {
   try {
     if (name === 'messages' && parts[1]) await messagePage(parts[1]);
     else if (name === 'queue' && session.sending_enabled) await queuePage(params);
-    else if (name === 'partners') await partnersPage();
+    else if (name === 'partners' && parts[1] === 'new') await partnerForm('');
+    else if (name === 'partners' && parts[2] === 'edit') await partnerForm(decodeURIComponent(parts[1]));
+    else if (name === 'partners') await partnersPage(params);
     else if (name === 'send' && session.sending_enabled && can('operator')) await sendPage();
     else if (name === 'account') accountPage(false);
     else if (name === 'users' && can('admin')) await usersPage();

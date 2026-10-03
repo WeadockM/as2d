@@ -22,6 +22,7 @@ import (
 	"github.com/WeadockM/as2d/internal/as2"
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/index"
+	"github.com/WeadockM/as2d/internal/partners"
 )
 
 func cert(t *testing.T, cn string, notAfter time.Time) *x509.Certificate {
@@ -65,12 +66,12 @@ func newSite(t *testing.T, token string) *testSite {
 	h := Handler(Config{
 		Index: db,
 		Local: as2.Station{ID: "US", Cert: cert(t, "US", time.Now().AddDate(1, 0, 0))},
-		Partners: []Partner{
-			{Config: &config.Partner{AS2ID: "ACME", RequireSignature: true,
+		Partners: partners.Static(
+			partners.Entry{Config: config.Partner{AS2ID: "ACME", RequireSignature: true,
 				Outbound: &config.Outbound{URL: "https://acme.example/as2", Compress: "before-sign"}},
-				Cert: cert(t, "ACME", time.Now().AddDate(0, 0, 10))},
-			{Config: &config.Partner{AS2ID: "OLD"}, Cert: cert(t, "OLD", time.Now().Add(-time.Minute))},
-		},
+				Cert: cert(t, "ACME", time.Now().AddDate(0, 0, 10)), Source: partners.FromConfig},
+			partners.Entry{Config: config.Partner{AS2ID: "OLD"}, Cert: cert(t, "OLD", time.Now().Add(-time.Minute)), Source: partners.FromConfig},
+		),
 		Token: token, Log: slog.New(slog.DiscardHandler),
 	})
 	s := httptest.NewServer(h)

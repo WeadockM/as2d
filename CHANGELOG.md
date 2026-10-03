@@ -7,6 +7,26 @@ change configuration or APIs; any such change is called out below.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-03
+
+### Added
+- Admins can add, edit and delete partners on the **Partners** page.
+  Changes take effect immediately, without a restart, and an invalid change
+  is refused without affecting the running partners.
+- Partner certificates can be uploaded or pasted (PEM or DER); the subject,
+  expiry and SHA-256 fingerprint are shown before saving.
+- Partner history: every saved version is kept with who saved it and what
+  changed, and any version can be restored.
+- Partners from `config.json` can be imported into the dashboard.
+- Partner changes are recorded in the audit log, with the fields changed.
+- `SIGHUP` (`systemctl reload as2d`) re-reads the partners in
+  `config.json` without a restart.
+
+### Changed
+- Partners added in the dashboard are stored under `<state_dir>/partners/`.
+  If a partner is in both `config.json` and the dashboard, the dashboard's
+  version is used and a warning is logged.
+
 ## [0.3.0] - 2026-10-03
 
 ### Added
@@ -103,7 +123,8 @@ First release.
   Services Server listener, in `queued` or `before_mdn` mode.
 - `as2send` for one-off test sends, and `as2keygen` for certificates.
 
-[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/WeadockM/as2d/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/WeadockM/as2d/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/WeadockM/as2d/compare/v0.2.0...v0.2.2
 [0.2.0]: https://github.com/WeadockM/as2d/compare/v0.1.0...v0.2.0

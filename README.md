@@ -98,7 +98,7 @@ are resolved against the config file's directory.
 | `api_listen`, `api_token` | Submission API; a token is required unless it listens on loopback |
 | `api_tls_cert`, `api_tls_key` | Serve the API over HTTPS (needed for remote and cloud Atoms) |
 | `status_webhook` | Called with the status JSON when a message to a partner is delivered or failed |
-| `state_dir` | Where dashboard user accounts and the audit log are kept (`state.db`) |
+| `state_dir` | Where dashboard user accounts, the audit log (`state.db`) and partners added in the dashboard (`partners/`) are kept |
 | `password_pepper_file`, `previous_pepper_files` | Turn on user accounts; see [Setting up user accounts](#setting-up-user-accounts) |
 | `workers` | Concurrent sends (default 4) |
 | `max_attempts` | Send attempts before giving up (default 10; backoff 1m, 2m, 5m, 15m, 30m, then hourly) |
@@ -297,7 +297,8 @@ When `api_listen` is set, the same port serves a browser dashboard, e.g.
   failed ones.
 - **Partners:** your station and each partner's settings and certificate,
   with warnings 30 days before a certificate expires. Certificates can be
-  downloaded, e.g. to send yours to a new partner.
+  downloaded, e.g. to send yours to a new partner. Admins can add and edit
+  partners here; see [Managing partners](#managing-partners).
 - **Send:** send a file to a partner through the queue, and optionally wait
   for the MDN.
 - **Users** and **Audit log** (admins): manage accounts, and see every
@@ -317,7 +318,7 @@ has one of three roles:
 |---|---|
 | **viewer** | see messages, the queue, partners and certificates |
 | **operator** | also retry failed messages and send files |
-| **admin** | also manage users and read the audit log |
+| **admin** | also manage partners and users, and read the audit log |
 
 Once accounts exist, the `api_token` no longer signs in to the dashboard.
 It keeps working for Boomi and scripts as `Authorization: Bearer <token>`,
@@ -358,6 +359,36 @@ works for an admin who is locked out.
 `password_pepper_file`, and list the old one under `previous_pepper_files`.
 Each user moves to the new pepper the next time they sign in. Once everyone
 has, remove the old file from the list.
+
+### Managing partners
+
+With `state_dir` set, admins can add, edit and delete partners on the
+**Partners** page. Changes take effect at once, without a restart: the new
+set of partners is checked as a whole first, and if anything is wrong
+(a bad certificate, an async MDN without a `public_url`, sending without a
+`spool_dir`) nothing changes and the error is shown.
+
+- **Adding a partner:** upload or paste the partner's certificate (PEM or
+  DER). The dashboard shows its subject, expiry and SHA-256 fingerprint
+  before you save; confirm the fingerprint with the partner by another
+  channel, such as a phone call.
+- **History:** every saved version is kept, with who saved it and what
+  changed, and any version can be restored. Deleting a partner keeps its
+  history. A partner with sends still queued can't be deleted.
+- **Audit log:** every change is recorded, with the fields that changed.
+
+Partners can still be defined in `config.json`. Those are shown as
+**config file** and are read-only in the dashboard until an admin imports
+them; after importing, remove the partner from `config.json` (the
+dashboard's copy wins until you do, and a warning says so). `as2d` re-reads
+the `config.json` partners on `SIGHUP` (`systemctl reload as2d`); other
+`config.json` settings still need a restart.
+
+Dashboard partners are stored as files under `<state_dir>/partners/`, one
+`.json` and `.crt` per partner, with old versions in `.history/`. Back this
+directory up with `state.db`. It holds only public certificates, but it is
+your trading-partner list, so keep it out of source control. Forward
+settings are not yet editable in the dashboard; they are kept as they are.
 
 ## Local testing
 

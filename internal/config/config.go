@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/WeadockM/as2d/internal/as2"
@@ -203,15 +205,10 @@ func Load(path string) (*Config, error) {
 	}
 	for i := range c.Partners {
 		p := &c.Partners[i]
+		p.ApplyDefaults()
 		paths = append(paths, &p.Cert)
 		if f := p.Forward; f != nil {
 			paths = append(paths, &f.PasswordFile, &f.CAFile)
-			if f.Mode == "" {
-				f.Mode = ForwardQueued
-			}
-			if f.Timeout.Duration == 0 {
-				f.Timeout.Duration = 60 * time.Second
-			}
 		}
 	}
 	for _, p := range paths {
@@ -268,45 +265,96 @@ func (c *Config) validate() error {
 	}
 	seen := map[string]bool{}
 	for i, p := range c.Partners {
-		switch {
-		case p.AS2ID == "":
-			errs = append(errs, fmt.Errorf("partners[%d]: as2_id is required", i))
-		case seen[p.AS2ID]:
+		if seen[p.AS2ID] {
 			errs = append(errs, fmt.Errorf("partners[%d]: duplicate as2_id %q", i, p.AS2ID))
-		case p.Cert == "":
-			errs = append(errs, fmt.Errorf("partners[%d]: cert is required", i))
 		}
 		seen[p.AS2ID] = true
-		if o := p.Outbound; o != nil {
-			if o.URL == "" {
-				errs = append(errs, fmt.Errorf("partners[%d].outbound: url is required", i))
-			}
-			switch o.MDN {
-			case "", "sync", "async", "none":
-			default:
-				errs = append(errs, fmt.Errorf("partners[%d].outbound: mdn must be sync, async or none", i))
-			}
-			switch o.Compress {
-			case "", "none", as2.CompressBeforeSign, as2.CompressAfterSign:
-			default:
-				errs = append(errs, fmt.Errorf("partners[%d].outbound: compress must be none, before-sign or after-sign", i))
-			}
-			if o.Cipher != "" {
-				if _, ok := as2.Ciphers[o.Cipher]; !ok {
-					errs = append(errs, fmt.Errorf("partners[%d].outbound: unknown cipher %q", i, o.Cipher))
-				}
+		if p.AS2ID == c.Local.AS2ID && p.AS2ID != "" {
+			errs = append(errs, fmt.Errorf("partners[%d]: as2_id %q is the local station's", i, p.AS2ID))
+		}
+		if err := p.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("partners[%d]: %w", i, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// CheckAS2ID reports why an AS2 identifier is unacceptable, if it is.
+// RFC 4130 allows 1 to 128 printable ASCII characters; quotes and
+// backslashes are refused because they need escaping in headers.
+func CheckAS2ID(id string) error {
+	switch {
+	case id == "":
+		return errors.New("as2_id is required")
+	case len(id) > 128:
+		return errors.New("as2_id must be at most 128 characters")
+	case strings.TrimSpace(id) != id:
+		return errors.New("as2_id must not start or end with a space")
+	}
+	for _, r := range id {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			return fmt.Errorf("as2_id may only contain printable ASCII characters other than \" and \\")
+		}
+	}
+	return nil
+}
+
+// ApplyDefaults fills in the forward mode and timeout when unset.
+func (p *Partner) ApplyDefaults() {
+	if f := p.Forward; f != nil {
+		if f.Mode == "" {
+			f.Mode = ForwardQueued
+		}
+		if f.Timeout.Duration == 0 {
+			f.Timeout.Duration = 60 * time.Second
+		}
+	}
+}
+
+// Validate checks a partner's settings, apart from whether its certificate
+// file exists and parses.
+func (p *Partner) Validate() error {
+	var errs []error
+	if err := CheckAS2ID(p.AS2ID); err != nil {
+		errs = append(errs, err)
+	}
+	if p.Cert == "" {
+		errs = append(errs, errors.New("cert is required"))
+	}
+	if o := p.Outbound; o != nil {
+		if u, err := url.Parse(o.URL); o.URL == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New("outbound: url is required and must be an http:// or https:// address"))
+		}
+		switch o.MDN {
+		case "", "sync", "async", "none":
+		default:
+			errs = append(errs, errors.New("outbound: mdn must be sync, async or none"))
+		}
+		switch o.Compress {
+		case "", "none", as2.CompressBeforeSign, as2.CompressAfterSign:
+		default:
+			errs = append(errs, errors.New("outbound: compress must be none, before-sign or after-sign"))
+		}
+		if o.Cipher != "" {
+			if _, ok := as2.Ciphers[o.Cipher]; !ok {
+				errs = append(errs, fmt.Errorf("outbound: unknown cipher %q", o.Cipher))
 			}
 		}
-		if f := p.Forward; f != nil {
-			if f.URL == "" {
-				errs = append(errs, fmt.Errorf("partners[%d].forward: url is required", i))
-			}
-			if f.Mode != ForwardQueued && f.Mode != ForwardBeforeMDN {
-				errs = append(errs, fmt.Errorf("partners[%d].forward: mode must be queued or before_mdn", i))
-			}
-			if (f.Username == "") != (f.PasswordFile == "") {
-				errs = append(errs, fmt.Errorf("partners[%d].forward: username and password_file go together", i))
-			}
+		switch o.MICAlg {
+		case "", "sha-1", "sha-256", "sha-384", "sha-512":
+		default:
+			errs = append(errs, fmt.Errorf("outbound: micalg must be sha-1, sha-256, sha-384 or sha-512, not %q", o.MICAlg))
+		}
+	}
+	if f := p.Forward; f != nil {
+		if f.URL == "" {
+			errs = append(errs, errors.New("forward: url is required"))
+		}
+		if f.Mode != ForwardQueued && f.Mode != ForwardBeforeMDN {
+			errs = append(errs, errors.New("forward: mode must be queued or before_mdn"))
+		}
+		if (f.Username == "") != (f.PasswordFile == "") {
+			errs = append(errs, errors.New("forward: username and password_file go together"))
 		}
 	}
 	return errors.Join(errs...)

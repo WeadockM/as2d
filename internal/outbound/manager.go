@@ -176,6 +176,8 @@ type Config struct {
 type Manager struct {
 	cfg Config
 
+	pmu sync.RWMutex // guards cfg.Partners and cfg.Forwards, which SetPartners replaces
+
 	mu          sync.Mutex
 	jobs        map[string]*Job
 	byMessageID map[string]*Job
@@ -250,6 +252,53 @@ func New(cfg Config) (*Manager, error) {
 
 func (m *Manager) dir(id string) string { return filepath.Join(m.cfg.SpoolDir, id) }
 
+// SetPartners replaces the partners sent to and the forward endpoints.
+// Queued jobs use the new settings from their next attempt; a job whose
+// partner was removed fails at that attempt.
+func (m *Manager) SetPartners(partners map[string]*Partner, forwards map[string]*forward.Target) {
+	m.pmu.Lock()
+	m.cfg.Partners, m.cfg.Forwards = partners, forwards
+	m.pmu.Unlock()
+	m.poke()
+}
+
+func (m *Manager) partner(id string) (*Partner, bool) {
+	m.pmu.RLock()
+	defer m.pmu.RUnlock()
+	p, ok := m.cfg.Partners[id]
+	return p, ok
+}
+
+func (m *Manager) forwardTarget(id string) (*forward.Target, bool) {
+	m.pmu.RLock()
+	defer m.pmu.RUnlock()
+	t, ok := m.cfg.Forwards[id]
+	return t, ok
+}
+
+func (m *Manager) partnerIDs() []string {
+	m.pmu.RLock()
+	defer m.pmu.RUnlock()
+	ids := make([]string, 0, len(m.cfg.Partners))
+	for id := range m.cfg.Partners {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// Pending counts a partner's jobs that are not finished yet.
+func (m *Manager) Pending(partner string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, j := range m.jobs {
+		if j.Partner == partner && !j.finished() {
+			n++
+		}
+	}
+	return n
+}
+
 // save persists j. The caller holds m.mu.
 func (m *Manager) save(j *Job) error {
 	data, err := json.MarshalIndent(j, "", "  ")
@@ -295,7 +344,7 @@ type Submission struct {
 
 // Submit queues a payload for delivery to a partner over AS2.
 func (m *Manager) Submit(s Submission) (Job, error) {
-	if _, ok := m.cfg.Partners[s.Partner]; !ok {
+	if _, ok := m.partner(s.Partner); !ok {
 		return Job{}, fmt.Errorf("%w: %q", ErrUnknownPartner, s.Partner)
 	}
 	if s.Filename == "" {
@@ -318,7 +367,7 @@ func (m *Manager) Submit(s Submission) (Job, error) {
 // endpoint. inboundDir is the received message's archive directory; its
 // meta.json is kept up to date with the forward's progress.
 func (m *Manager) SubmitForward(partner string, msg forward.Message, inboundDir string) (Job, error) {
-	if _, ok := m.cfg.Forwards[partner]; !ok {
+	if _, ok := m.forwardTarget(partner); !ok {
 		return Job{}, fmt.Errorf("partner %q has no queued forward endpoint", partner)
 	}
 	j := m.newJob(KindForward, partner, msg.Filename, msg.ContentType, msg.Subject, len(msg.Payload))
@@ -598,7 +647,7 @@ func (m *Manager) attempt(ctx context.Context, j *Job) (released bool) {
 		return false
 	}
 	log := m.cfg.Log.With("job", j.ID, "partner", j.Partner)
-	p, ok := m.cfg.Partners[j.Partner]
+	p, ok := m.partner(j.Partner)
 	if !ok {
 		m.finish(j, Failed, "partner no longer has outbound settings", nil)
 		return false
@@ -679,7 +728,7 @@ func (m *Manager) attempt(ctx context.Context, j *Job) (released bool) {
 
 // attemptForward posts a received payload to the partner's forward endpoint.
 func (m *Manager) attemptForward(ctx context.Context, j *Job) {
-	target, ok := m.cfg.Forwards[j.Partner]
+	target, ok := m.forwardTarget(j.Partner)
 	if !ok {
 		m.finish(j, Failed, "partner no longer has a queued forward endpoint", nil)
 		return
@@ -838,7 +887,7 @@ func (m *Manager) applyMDN(j *Job, p *Partner, h http.Header, body []byte) {
 // HandleMDN accepts an asynchronous MDN posted to the inbound endpoint.
 func (m *Manager) HandleMDN(h http.Header, body []byte) error {
 	from := as2.UnquoteID(h.Get("As2-From"))
-	p, ok := m.cfg.Partners[from]
+	p, ok := m.partner(from)
 	if !ok {
 		return fmt.Errorf("MDN from unknown partner %q", from)
 	}

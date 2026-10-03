@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/smallstep/pkcs7"
 )
@@ -57,7 +58,25 @@ type Partner struct {
 // Receiver unwraps inbound AS2 messages addressed to Local.
 type Receiver struct {
 	Local    Station
-	Partners map[string]*Partner // keyed by AS2 ID
+	Partners map[string]*Partner // keyed by AS2 ID; replace with SetPartners once in use
+
+	mu sync.RWMutex
+}
+
+// SetPartners replaces the partner set. Messages already being processed
+// finish with the partner they started with.
+func (r *Receiver) SetPartners(partners map[string]*Partner) {
+	r.mu.Lock()
+	r.Partners = partners
+	r.mu.Unlock()
+}
+
+// Partner returns the partner with the given AS2 ID.
+func (r *Receiver) Partner(id string) (*Partner, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.Partners[id]
+	return p, ok
 }
 
 // Failure records why a message could not be processed. It is reported to
@@ -124,7 +143,7 @@ func (r *Receiver) Process(h http.Header, body []byte) (*Message, error) {
 	if msg.To != r.Local.ID {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownRecipient, msg.To)
 	}
-	partner, ok := r.Partners[msg.From]
+	partner, ok := r.Partner(msg.From)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownPartner, msg.From)
 	}

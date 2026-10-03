@@ -40,7 +40,7 @@ type Server struct {
 	MDNs MDNHandler
 
 	// Forwards pass received payloads on to another system, by partner.
-	Forwards map[string]*ForwardRule
+	Forwards map[string]*ForwardRule // replace with SetForwards once serving
 	// Queue takes forwards in queued mode.
 	Queue ForwardQueue
 
@@ -55,6 +55,8 @@ type Server struct {
 
 	mu       sync.Mutex
 	inFlight map[string]bool // partner + Message-ID of messages being processed
+
+	fmu sync.RWMutex // guards Forwards
 }
 
 // MDNHandler accepts asynchronous MDNs.
@@ -173,7 +175,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Delivery: forward and/or inbox. The message is only recorded as
 		// seen (and acknowledged) once every step has succeeded; if one
 		// fails, the partner gets a 500 and resends.
-		rule := s.Forwards[msg.From]
+		rule := s.forwardRule(msg.From)
 		fwd := forward.Message{
 			From: msg.From, To: msg.To, MessageID: msg.ID, Filename: msg.Filename,
 			Subject: msg.Subject, ContentType: msg.ContentType, Payload: msg.Payload,
@@ -409,4 +411,18 @@ func archiveFiles(r *http.Request, body []byte, msg *as2.Message, mdn *as2.MDN, 
 
 	files["meta.json"], _ = json.MarshalIndent(m, "", "  ")
 	return files
+}
+
+// SetForwards replaces the forward rules. Messages already being processed
+// keep the rule they started with.
+func (s *Server) SetForwards(rules map[string]*ForwardRule) {
+	s.fmu.Lock()
+	s.Forwards = rules
+	s.fmu.Unlock()
+}
+
+func (s *Server) forwardRule(partner string) *ForwardRule {
+	s.fmu.RLock()
+	defer s.fmu.RUnlock()
+	return s.Forwards[partner]
 }

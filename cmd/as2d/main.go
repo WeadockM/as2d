@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/WeadockM/as2d/internal/forward"
 	"github.com/WeadockM/as2d/internal/index"
 	"github.com/WeadockM/as2d/internal/outbound"
+	"github.com/WeadockM/as2d/internal/partners"
 	"github.com/WeadockM/as2d/internal/server"
 	"github.com/WeadockM/as2d/internal/version"
 	"github.com/WeadockM/as2d/internal/web"
@@ -84,11 +86,10 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 	}
 	defer idx.Close()
 
-	local, partners, err := cfg.Stations()
+	local, _, err := cfg.Stations()
 	if err != nil {
 		return err
 	}
-	warnCertificates(cfg, local, partners, log)
 	store := &archive.Store{Root: cfg.ArchiveDir, Index: idx, OnIndexError: func(dir string, err error) {
 		log.Error("failed to index archived message; run as2d -reindex to repair", "dir", dir, "err", err)
 	}}
@@ -107,8 +108,37 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 		}
 	}
 
-	srv := server.New(&as2.Receiver{Local: local, Partners: partners}, store, log, cfg.MaxBodyBytes)
+	srv := server.New(&as2.Receiver{Local: local}, store, log, cfg.MaxBodyBytes)
 	srv.InboxDir = cfg.InboxDir
+
+	// The outbound queue exists whenever spool_dir is set, so partners
+	// added in the dashboard can be sent to without a restart.
+	var mgr *outbound.Manager
+	if cfg.SpoolDir != "" {
+		if mgr, err = newOutbound(cfg, local, store, log); err != nil {
+			return err
+		}
+		srv.MDNs = mgr
+		srv.Queue = mgr
+	} else if cfg.NeedsQueue() {
+		return errors.New("spool_dir is required to send to partners or to forward in queued mode")
+	}
+
+	// Partners from config.json and the dashboard, applied to the receiver,
+	// the forward rules and the queue, and replaced live on every change.
+	var partnerStore *partners.Store
+	if cfg.StateDir != "" {
+		if partnerStore, err = partners.OpenStore(filepath.Join(cfg.StateDir, "partners")); err != nil {
+			return err
+		}
+	}
+	rt := &partners.Runtime{Sys: cfg, Store: partnerStore, Receiver: srv.Receiver, Server: srv, Manager: mgr,
+		Log: log.With("component", "partners")}
+	if err := rt.Load(cfg.Partners); err != nil {
+		return err
+	}
+	warnCertificates(local, rt.Current(), log)
+	log.Info("partners loaded", "partners", len(rt.Current().Entries), "dashboard_editing", rt.Editable())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -145,24 +175,31 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 		}()
 	}
 
-	forwards, queued, err := newForwards(cfg)
-	if err != nil {
-		return err
-	}
-	srv.Forwards = forwards
-
-	var mgr *outbound.Manager
-	if cfg.NeedsQueue() {
-		if mgr, err = newOutbound(cfg, local, partners, store, queued, log); err != nil {
-			return err
-		}
-		srv.MDNs = mgr
-		srv.Queue = mgr
+	if mgr != nil {
 		background.Go(func() { mgr.Run(outCtx) })
 		if cfg.OutboxDir != "" {
 			background.Go(func() { mgr.WatchOutbox(outCtx, cfg.OutboxDir, 2*time.Second) })
 		}
 	}
+
+	// SIGHUP (systemctl reload as2d) re-reads the partners in config.json.
+	// Other config.json changes need a restart.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for range hup {
+			fresh, err := config.Load(configPath)
+			if err == nil {
+				err = rt.Load(fresh.Partners)
+			}
+			if err != nil {
+				log.Error("reloading partners from config.json failed; keeping the current ones", "err", err)
+				continue
+			}
+			log.Info("reloaded partners from config.json; other settings need a restart", "partners", len(rt.Current().Entries))
+		}
+	}()
 
 	// The API listener serves the dashboard, archive and partner views, and
 	// the outbound API when there is a queue.
@@ -177,13 +214,8 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 					"api_listen", cfg.APIListen)
 			}
 		}
-		var webPartners []web.Partner
-		for i := range cfg.Partners {
-			p := &cfg.Partners[i]
-			webPartners = append(webPartners, web.Partner{Config: p, Cert: partners[p.AS2ID].Cert})
-		}
 		h := web.Handler(web.Config{
-			Index: idx, Queue: mgr, Local: local, Partners: webPartners,
+			Index: idx, Queue: mgr, Local: local, Partners: rt,
 			Token: cfg.APIToken, Accounts: users, Secure: cfg.APITLSCert != "", MaxBody: cfg.MaxBodyBytes, Log: log.With("component", "web"),
 		})
 		// The write timeout must outlast the longest wait= a caller can ask for.
@@ -298,7 +330,7 @@ func openIndex(cfg *config.Config, rebuild bool, log *slog.Logger) (*index.DB, e
 }
 
 // warnCertificates logs certificates that have expired or expire soon.
-func warnCertificates(cfg *config.Config, local as2.Station, partners map[string]*as2.Partner, log *slog.Logger) {
+func warnCertificates(local as2.Station, set *partners.Set, log *slog.Logger) {
 	check := func(owner string, c *x509.Certificate) {
 		switch web.CertStatus(c, time.Now()) {
 		case "expired":
@@ -309,36 +341,9 @@ func warnCertificates(cfg *config.Config, local as2.Station, partners map[string
 		}
 	}
 	check("local station "+local.ID, local.Cert)
-	for _, p := range cfg.Partners {
-		check("partner "+p.AS2ID, partners[p.AS2ID].Cert)
+	for _, e := range set.Entries {
+		check("partner "+e.Config.AS2ID, e.Cert)
 	}
-}
-
-// newForwards builds each partner's forward endpoint. It returns the rules
-// for the inbound server and, separately, the targets of queued forwards.
-func newForwards(cfg *config.Config) (map[string]*server.ForwardRule, map[string]*forward.Target, error) {
-	rules := map[string]*server.ForwardRule{}
-	queued := map[string]*forward.Target{}
-	for _, p := range cfg.Partners {
-		f := p.Forward
-		if f == nil {
-			continue
-		}
-		client, err := forward.NewClient(f.CAFile, f.Timeout.Duration)
-		if err != nil {
-			return nil, nil, fmt.Errorf("partner %q forward: %w", p.AS2ID, err)
-		}
-		password, err := forward.ReadSecret(f.PasswordFile)
-		if err != nil {
-			return nil, nil, fmt.Errorf("partner %q forward: %w", p.AS2ID, err)
-		}
-		t := &forward.Target{URL: f.URL, Username: f.Username, Password: password, Client: client}
-		rules[p.AS2ID] = &server.ForwardRule{Target: t, BeforeMDN: f.Mode == config.ForwardBeforeMDN}
-		if f.Mode == config.ForwardQueued {
-			queued[p.AS2ID] = t
-		}
-	}
-	return rules, queued, nil
 }
 
 func newWebhook(w *config.Webhook) (*forward.Webhook, error) {
@@ -360,29 +365,15 @@ func newWebhook(w *config.Webhook) (*forward.Webhook, error) {
 	return &forward.Webhook{URL: w.URL, Username: w.Username, Password: password, BearerToken: token, Client: client}, nil
 }
 
-func newOutbound(cfg *config.Config, local as2.Station, partners map[string]*as2.Partner,
-	store *archive.Store, forwards map[string]*forward.Target, log *slog.Logger) (*outbound.Manager, error) {
-	if cfg.SpoolDir == "" {
-		return nil, errors.New("spool_dir is required to send to partners or to forward in queued mode")
-	}
+// newOutbound creates the outbound queue. Its partners and forward
+// endpoints are set by the partners runtime.
+func newOutbound(cfg *config.Config, local as2.Station, store *archive.Store, log *slog.Logger) (*outbound.Manager, error) {
 	webhook, err := newWebhook(cfg.StatusWebhook)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]*outbound.Partner{}
-	for _, p := range cfg.Partners {
-		if p.Outbound == nil {
-			continue
-		}
-		opts := p.Outbound.SendOptions(cfg.PublicURL)
-		if p.Outbound.MDN == "async" && opts.AsyncMDNURL == "" {
-			return nil, fmt.Errorf("partner %q: async MDNs need public_url or async_mdn_url", p.AS2ID)
-		}
-		out[p.AS2ID] = &outbound.Partner{Partner: partners[p.AS2ID], URL: p.Outbound.URL, Options: opts}
-	}
 	return outbound.New(outbound.Config{
 		Local:       local,
-		Partners:    out,
 		SpoolDir:    cfg.SpoolDir,
 		Archive:     store,
 		Log:         log.With("component", "outbound"),
@@ -390,7 +381,6 @@ func newOutbound(cfg *config.Config, local as2.Station, partners map[string]*as2
 		MaxAttempts: cfg.MaxAttempts,
 		MDNTimeout:  cfg.AsyncMDNTimeout.Duration,
 		Retention:   cfg.SpoolRetention.Duration,
-		Forwards:    forwards,
 		Webhook:     webhook,
 	})
 }

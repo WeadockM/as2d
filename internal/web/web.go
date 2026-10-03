@@ -26,6 +26,7 @@ import (
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/index"
 	"github.com/WeadockM/as2d/internal/outbound"
+	"github.com/WeadockM/as2d/internal/partners"
 )
 
 //go:embed static
@@ -34,17 +35,11 @@ var static embed.FS
 // ExpiryWarning is how close to expiry a certificate is flagged.
 const ExpiryWarning = 30 * 24 * time.Hour
 
-// Partner is what the dashboard shows about a trading partner.
-type Partner struct {
-	Config *config.Partner
-	Cert   *x509.Certificate
-}
-
 type Config struct {
 	Index    *index.DB
 	Queue    *outbound.Manager // nil when nothing is sent or forwarded
 	Local    as2.Station
-	Partners []Partner
+	Partners *partners.Runtime
 	Token    string            // empty: no token (loopback only; enforced by the caller)
 	Accounts *accounts.Service // nil when user accounts are not configured
 	Secure   bool              // served over TLS; marks session cookies Secure
@@ -55,6 +50,9 @@ type Config struct {
 // Handler returns the dashboard and its API, including the outbound API
 // when there is a queue.
 func Handler(cfg Config) http.Handler {
+	if cfg.Partners == nil {
+		cfg.Partners = partners.Static()
+	}
 	s := &site{cfg: cfg, auth: &auth{token: cfg.Token, secure: cfg.Secure, accounts: cfg.Accounts}}
 	mux := http.NewServeMux()
 	route := func(pattern string, min accounts.Role, h http.HandlerFunc) {
@@ -70,6 +68,14 @@ func Handler(cfg Config) http.Handler {
 	route("GET /api/archive/messages/{id}", accounts.Viewer, s.getMessage)
 	route("GET /api/archive/messages/{id}/files/{file...}", accounts.Viewer, s.getFile)
 	route("GET /api/partners", accounts.Viewer, s.partners)
+	route("GET /api/partners/{id}", accounts.Viewer, s.getPartner)
+	route("POST /api/partners", accounts.Admin, s.createPartner)
+	route("PUT /api/partners/{id}", accounts.Admin, s.updatePartner)
+	route("DELETE /api/partners/{id}", accounts.Admin, s.deletePartner)
+	route("POST /api/partners/{id}/import", accounts.Admin, s.importPartner)
+	route("GET /api/partners/{id}/history", accounts.Admin, s.partnerHistory)
+	route("POST /api/partners/{id}/history/{version}/restore", accounts.Admin, s.restorePartner)
+	route("POST /api/certificates/inspect", accounts.Admin, s.inspectCertificate)
 	route("GET /api/certs/local.pem", accounts.Viewer, s.localCert)
 	route("GET /api/certs/partners/{id}", accounts.Viewer, s.partnerCert)
 
@@ -292,14 +298,15 @@ func describeCert(c *x509.Certificate) *certInfo {
 }
 
 type outboundInfo struct {
-	URL       string `json:"url"`
-	Encrypt   bool   `json:"encrypt"`
-	Sign      bool   `json:"sign"`
-	Cipher    string `json:"cipher"`
-	MICAlg    string `json:"micalg"`
-	Compress  string `json:"compress"`
-	MDN       string `json:"mdn"`
-	SignedMDN bool   `json:"signed_mdn"`
+	URL         string `json:"url"`
+	Encrypt     bool   `json:"encrypt"`
+	Sign        bool   `json:"sign"`
+	Cipher      string `json:"cipher"`
+	MICAlg      string `json:"micalg"`
+	Compress    string `json:"compress"`
+	MDN         string `json:"mdn"`
+	SignedMDN   bool   `json:"signed_mdn"`
+	AsyncMDNURL string `json:"async_mdn_url,omitempty"`
 }
 
 type forwardInfo struct {
@@ -308,35 +315,52 @@ type forwardInfo struct {
 	Username string `json:"username,omitempty"`
 }
 
-func (s *site) partners(w http.ResponseWriter, r *http.Request) {
-	type partnerOut struct {
-		ID                string        `json:"id"`
-		Cert              *certInfo     `json:"cert"`
-		RequireEncryption bool          `json:"require_encryption"`
-		RequireSignature  bool          `json:"require_signature"`
-		Outbound          *outboundInfo `json:"outbound"`
-		Forward           *forwardInfo  `json:"forward"`
+type partnerOut struct {
+	ID                string        `json:"id"`
+	Cert              *certInfo     `json:"cert"`
+	RequireEncryption bool          `json:"require_encryption"`
+	RequireSignature  bool          `json:"require_signature"`
+	Outbound          *outboundInfo `json:"outbound"`
+	Forward           *forwardInfo  `json:"forward"`
+	Source            string        `json:"source"`         // config or dashboard
+	AlsoInConfig      bool          `json:"also_in_config"` // a dashboard partner also in config.json
+	Version           int           `json:"version,omitempty"`
+	Updated           time.Time     `json:"updated,omitzero"`
+	UpdatedBy         string        `json:"updated_by,omitempty"`
+}
+
+func describePartner(e partners.Entry) partnerOut {
+	p := e.Config
+	po := partnerOut{
+		ID: p.AS2ID, Cert: describeCert(e.Cert), Source: e.Source, AlsoInConfig: e.AlsoInConfig,
+		RequireEncryption: p.RequireEncryption, RequireSignature: p.RequireSignature,
 	}
+	if e.Record != nil {
+		po.Version, po.Updated, po.UpdatedBy = e.Record.Version, e.Record.Updated, e.Record.UpdatedBy
+	}
+	if o := p.Outbound; o != nil {
+		po.Outbound = &outboundInfo{
+			URL: o.URL, Encrypt: config.Bool(o.Encrypt), Sign: config.Bool(o.Sign), SignedMDN: config.Bool(o.SignedMDN),
+			Cipher: or(o.Cipher, "aes256-cbc"), MICAlg: or(o.MICAlg, "sha-256"), Compress: or(o.Compress, "none"),
+			MDN: or(o.MDN, "sync"), AsyncMDNURL: o.AsyncMDNURL,
+		}
+	}
+	if f := p.Forward; f != nil {
+		po.Forward = &forwardInfo{URL: f.URL, Mode: f.Mode, Username: f.Username}
+	}
+	return po
+}
+
+func (s *site) partners(w http.ResponseWriter, r *http.Request) {
 	out := []partnerOut{}
-	for _, p := range s.cfg.Partners {
-		po := partnerOut{
-			ID: p.Config.AS2ID, Cert: describeCert(p.Cert),
-			RequireEncryption: p.Config.RequireEncryption, RequireSignature: p.Config.RequireSignature,
-		}
-		if o := p.Config.Outbound; o != nil {
-			po.Outbound = &outboundInfo{
-				URL: o.URL, Encrypt: config.Bool(o.Encrypt), Sign: config.Bool(o.Sign), SignedMDN: config.Bool(o.SignedMDN),
-				Cipher: or(o.Cipher, "aes256-cbc"), MICAlg: or(o.MICAlg, "sha-256"), Compress: or(o.Compress, "none"), MDN: or(o.MDN, "sync"),
-			}
-		}
-		if f := p.Config.Forward; f != nil {
-			po.Forward = &forwardInfo{URL: f.URL, Mode: f.Mode, Username: f.Username}
-		}
-		out = append(out, po)
+	for _, e := range s.cfg.Partners.Current().Entries {
+		out = append(out, describePartner(e))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"local":    map[string]any{"id": s.cfg.Local.ID, "cert": describeCert(s.cfg.Local.Cert)},
 		"partners": out,
+		"editable": s.cfg.Partners.Editable(),
+		"can_send": s.cfg.Queue != nil,
 	})
 }
 
@@ -346,11 +370,9 @@ func (s *site) localCert(w http.ResponseWriter, r *http.Request) {
 
 func (s *site) partnerCert(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSuffix(r.PathValue("id"), ".pem")
-	for _, p := range s.cfg.Partners {
-		if p.Config.AS2ID == id {
-			servePEM(w, id, p.Cert)
-			return
-		}
+	if e, ok := s.cfg.Partners.Current().Entry(id); ok {
+		servePEM(w, id, e.Cert)
+		return
 	}
 	apiError(w, http.StatusNotFound, "no such partner")
 }
