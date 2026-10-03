@@ -1,0 +1,54 @@
+# Release build configuration. The release workflow runs this when a version
+# tag is pushed; see docs/releasing.md.
+version: 2
+
+project_name: as2d
+
+builds:
+  - &build
+    id: as2d
+    main: ./cmd/as2d
+    binary: as2d
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/WeadockM/as2d/internal/version.Version={{ .Tag }}
+  - <<: *build
+    id: as2send
+    main: ./cmd/as2send
+    binary: as2send
+  - <<: *build
+    id: as2keygen
+    main: ./cmd/as2keygen
+    binary: as2keygen
+
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - SECURITY.md
+      - deploy/*
+      - examples/*.json
+      - examples/sample.edi
+
+checksum:
+  name_template: SHA256SUMS
+
+changelog:
+  disable: true # the notes come from CHANGELOG.md
+
+release:
+  prerelease: auto

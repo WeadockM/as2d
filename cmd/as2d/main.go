@@ -20,6 +20,7 @@ import (
 
 	"github.com/WeadockM/as2d/internal/archive"
 	"github.com/WeadockM/as2d/internal/as2"
+	"github.com/WeadockM/as2d/internal/cli"
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/forward"
 	"github.com/WeadockM/as2d/internal/index"
@@ -30,7 +31,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "/etc/as2d/config.json", "path to the configuration file")
+	configPath := flag.String("config", cli.DefaultConfigPath(), "path to the configuration file")
 	reindex := flag.Bool("reindex", false, "rebuild the message index from the archive, then exit")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -43,6 +44,9 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(*configPath, *reindex, log); err != nil {
 		log.Error("fatal", "err", err)
+		cli.Explain("as2d", `-config path\to\config.json`,
+			"To start it by double-clicking instead, put a working config.json next to as2d.exe.")
+		cli.Hold()
 		os.Exit(1)
 	}
 }

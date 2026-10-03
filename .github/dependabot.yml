@@ -1,0 +1,13 @@
+# Weekly pull requests for dependency updates. Security updates are separate
+# and arrive as soon as an advisory is published, once Dependabot alerts are
+# turned on in the repository settings.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

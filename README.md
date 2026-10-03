@@ -1,5 +1,6 @@
 # as2d
 
+[![CI](https://github.com/WeadockM/as2d/actions/workflows/ci.yml/badge.svg)](https://github.com/WeadockM/as2d/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/WeadockM/as2d?sort=semver)](https://github.com/WeadockM/as2d/releases/latest)
 [![Go version](https://img.shields.io/github/go-mod/go-version/WeadockM/as2d)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -55,6 +56,7 @@ go build -ldflags "-X github.com/WeadockM/as2d/internal/version.Version=v0.2.0" 
 ```
 
 Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
+Releases are built by GitHub Actions; see [docs/releasing.md](docs/releasing.md).
 
 ## Install on Linux
 
@@ -339,6 +341,22 @@ there), and `copy` instead of `cp`.
 The Postman collection in [`postman/`](postman) sends plain, unsigned
 requests to the MYCOMPANY daemon. Signed and encrypted messages are covered
 by `as2send` and the Go tests.
+
+## Running on Windows
+
+The `.exe` files are command-line programs. Run them from PowerShell or
+another terminal:
+
+```powershell
+.\as2d.exe -config examples\config.json
+```
+
+Without `-config`, as2d on Windows looks for `config.json` next to
+`as2d.exe`, so with a working config there you can also start it by
+double-clicking it. If you double-click it and it can't start, the window
+explains why and stays open until you press Enter. Windows is fine for trying
+as2d out; for production, run it on Linux or under WSL (below), where it runs
+as a service.
 
 ## Running under WSL
 

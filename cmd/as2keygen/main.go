@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/WeadockM/as2d/internal/cli"
 	"github.com/WeadockM/as2d/internal/version"
 )
 
@@ -32,10 +33,13 @@ func main() {
 	}
 	if *id == "" {
 		flag.Usage()
+		cli.Explain("as2keygen", "-id MYCOMPANY -out certs", "")
+		cli.Hold()
 		os.Exit(2)
 	}
 	if err := run(*id, *out, *bits, *days); err != nil {
 		fmt.Fprintln(os.Stderr, "as2keygen:", err)
+		cli.Hold()
 		os.Exit(1)
 	}
 }

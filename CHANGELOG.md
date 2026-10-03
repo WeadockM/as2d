@@ -5,6 +5,24 @@ All notable changes to as2d are listed here. The format follows
 [Semantic Versioning](https://semver.org/). Until 1.0, minor versions may
 change configuration or APIs; any such change is called out below.
 
+## [Unreleased]
+
+## [0.2.1] - 2026-10-03
+
+### Added
+- Release archives built automatically for Linux (amd64 and arm64) and
+  Windows (amd64). Each includes the README, licence, changelog, the systemd
+  unit and example configuration, and the release lists SHA-256 checksums.
+
+### Changed
+- On Windows, `-config` defaults to `config.json` next to the program, so
+  as2d can be started by double-clicking it. On Linux the default is still
+  `/etc/as2d/config.json`.
+- Double-clicking `as2d.exe`, `as2send.exe` or `as2keygen.exe` no longer
+  flashes a window that closes at once: if the program can't run, the window
+  explains how to run it and stays open until Enter is pressed. Behaviour
+  from a terminal or as a service is unchanged.
+
 ## [0.2.0] - 2026-10-02
 
 ### Added
@@ -40,5 +58,7 @@ First release.
   Services Server listener, in `queued` or `before_mdn` mode.
 - `as2send` for one-off test sends, and `as2keygen` for certificates.
 
+[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/WeadockM/as2d/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/WeadockM/as2d/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/WeadockM/as2d/releases/tag/v0.1.0

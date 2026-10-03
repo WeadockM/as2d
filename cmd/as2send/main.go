@@ -24,6 +24,7 @@ import (
 
 	"github.com/WeadockM/as2d/internal/archive"
 	"github.com/WeadockM/as2d/internal/as2"
+	"github.com/WeadockM/as2d/internal/cli"
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/outbound"
 	"github.com/WeadockM/as2d/internal/version"
@@ -39,7 +40,7 @@ type flags struct {
 
 func main() {
 	var f flags
-	flag.StringVar(&f.config, "config", "/etc/as2d/config.json", "configuration file")
+	flag.StringVar(&f.config, "config", cli.DefaultConfigPath(), "configuration file")
 	flag.StringVar(&f.to, "to", "", "AS2 ID of the partner (default: the only partner with outbound settings)")
 	flag.StringVar(&f.file, "file", "", "file to send (required)")
 	flag.StringVar(&f.contentType, "content-type", "", "payload content type (default: guessed from the file extension)")
@@ -64,14 +65,16 @@ func main() {
 
 	if f.file == "" {
 		flag.Usage()
+		cli.Explain("as2send", `-config path\to\config.json -file invoice.edi`, "")
+		cli.Hold()
 		os.Exit(2)
 	}
 	ok, err := run(f)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "as2send:", err)
-		os.Exit(1)
 	}
-	if !ok {
+	if err != nil || !ok {
+		cli.Hold()
 		os.Exit(1)
 	}
 }
