@@ -1,6 +1,6 @@
 # as2d
 
-[![Release](https://img.shields.io/github/v/release/WeadockM/as2d?sort=semver)](https://github.com/WeadockM/as2d/releases)
+[![Version](https://img.shields.io/github/v/tag/WeadockM/as2d?sort=semver&label=version)](CHANGELOG.md)
 [![Go version](https://img.shields.io/github/go-mod/go-version/WeadockM/as2d)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
