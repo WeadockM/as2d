@@ -4,3 +4,4 @@
 /examples/data/
 *.key
 *.pass
+/dist/

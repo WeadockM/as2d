@@ -1,6 +1,6 @@
 # as2d
 
-[![Version](https://img.shields.io/github/v/tag/WeadockM/as2d?sort=semver&label=version)](CHANGELOG.md)
+[![Release](https://img.shields.io/github/v/release/WeadockM/as2d?sort=semver)](https://github.com/WeadockM/as2d/releases/latest)
 [![Go version](https://img.shields.io/github/go-mod/go-version/WeadockM/as2d)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -39,7 +39,9 @@ GOOS=linux GOARCH=amd64 go build -o bin/linux-amd64/ ./cmd/...
 
 From PowerShell, set the variables first: `$env:GOOS="linux"; $env:GOARCH="amd64"`.
 This builds `as2d` (the daemon), `as2send` (one-off sends for testing) and
-`as2keygen` (certificate generator). Alternatively:
+`as2keygen` (certificate generator). Prebuilt Linux and Windows binaries,
+with SHA-256 checksums, are attached to each
+[release](https://github.com/WeadockM/as2d/releases/latest). Alternatively:
 
 ```sh
 go install github.com/WeadockM/as2d/cmd/...@latest
