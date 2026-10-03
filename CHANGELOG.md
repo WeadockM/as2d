@@ -9,6 +9,17 @@ change configuration or APIs; any such change is called out below.
 
 ## [0.2.1] - 2026-10-03
 
+### Security
+- Built with Go 1.26.8. Versions 0.1.0 and 0.2.0 were built with Go 1.26.1,
+  whose standard library has 14 known vulnerabilities that as2d's code can
+  reach, in TLS, X.509 certificate and ASN.1 parsing, HTTP, and URL and
+  header handling (GO-2026-4866 to GO-2026-6218; run `govulncheck` for the
+  list). **Upgrading is recommended for all users.**
+- `go.mod` now names the toolchain (`toolchain go1.26.8`), so building or
+  `go install`-ing as2d with an older Go automatically uses 1.26.8. CI and
+  release builds use the newest Go 1.26 patch release and run `govulncheck`
+  on every change.
+
 ### Added
 - Release archives built automatically for Linux (amd64 and arm64) and
   Windows (amd64). Each includes the README, licence, changelog, the systemd

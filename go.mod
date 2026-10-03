@@ -2,6 +2,8 @@ module github.com/WeadockM/as2d
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/smallstep/pkcs7 v0.2.3
 	modernc.org/sqlite v1.60.1

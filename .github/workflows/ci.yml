@@ -17,11 +17,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # The newest 1.26 patch release, so builds and govulncheck always
+          # include the latest standard library security fixes.
+          go-version: '1.26.x'
+          check-latest: true
 
       - name: Check formatting
         if: runner.os == 'Linux'
@@ -51,11 +54,14 @@ jobs:
     name: Known vulnerabilities
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # The newest 1.26 patch release, so builds and govulncheck always
+          # include the latest standard library security fixes.
+          go-version: '1.26.x'
+          check-latest: true
 
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
