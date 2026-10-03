@@ -98,6 +98,8 @@ are resolved against the config file's directory.
 | `api_listen`, `api_token` | Submission API; a token is required unless it listens on loopback |
 | `api_tls_cert`, `api_tls_key` | Serve the API over HTTPS (needed for remote and cloud Atoms) |
 | `status_webhook` | Called with the status JSON when a message to a partner is delivered or failed |
+| `state_dir` | Where dashboard user accounts and the audit log are kept (`state.db`) |
+| `password_pepper_file`, `previous_pepper_files` | Turn on user accounts; see [Setting up user accounts](#setting-up-user-accounts) |
 | `workers` | Concurrent sends (default 4) |
 | `max_attempts` | Send attempts before giving up (default 10; backoff 1m, 2m, 5m, 15m, 30m, then hourly) |
 | `async_mdn_timeout` | How long to wait for an async MDN before resending (default `1h`) |
@@ -298,12 +300,64 @@ When `api_listen` is set, the same port serves a browser dashboard, e.g.
   downloaded, e.g. to send yours to a new partner.
 - **Send:** send a file to a partner through the queue, and optionally wait
   for the MDN.
+- **Users** and **Audit log** (admins): manage accounts, and see every
+  sign-in, failed sign-in and change made through the dashboard.
 
-Sign in with the `api_token`. Scripts can keep using
-`Authorization: Bearer <token>`. Without a token, which is only allowed when
-the API listens on loopback, the dashboard is open to anyone who can reach
-that port. The dashboard is self-contained: it loads nothing from the
-internet. Expiring certificates are also logged when the daemon starts.
+The dashboard is self-contained: it loads nothing from the internet.
+Expiring certificates are also logged when the daemon starts.
+
+### Signing in
+
+Without user accounts, the dashboard signs in with the `api_token` (or is
+open, if there is no token, which is only allowed on loopback). With user
+accounts, each engineer signs in with their own username and password, and
+has one of three roles:
+
+| Role | Can |
+|---|---|
+| **viewer** | see messages, the queue, partners and certificates |
+| **operator** | also retry failed messages and send files |
+| **admin** | also manage users and read the audit log |
+
+Once accounts exist, the `api_token` no longer signs in to the dashboard.
+It keeps working for Boomi and scripts as `Authorization: Bearer <token>`,
+with operator rights.
+
+### Setting up user accounts
+
+Passwords are hashed with Argon2id after being combined with a secret
+**pepper**, which is kept in its own file, outside the account database. A
+copy of the database alone is then of no use for attacking passwords.
+
+```sh
+# 1. Create the pepper, readable only by root and the as2d group.
+sudo sh -c 'umask 027; as2d -generate-pepper > /etc/as2d/pepper.key'
+sudo chgrp as2d /etc/as2d/pepper.key
+
+# 2. In /etc/as2d/config.json, add:
+#      "state_dir": "/var/lib/as2d/state",
+#      "password_pepper_file": "pepper.key",
+#    then restart as2d.
+
+# 3. Create the first admin, as the as2d user so it owns the database.
+sudo -u as2d as2d -config /etc/as2d/config.json -create-admin yourname
+```
+
+The last command prints a one-time password. Sign in with it and you're
+asked to choose your own. Add other engineers from the **Users** page: each
+gets a one-time password to pass on, shown once. Passwords must be at least
+12 characters. After 5 wrong passwords in 15 minutes, an account can't sign
+in until the 15 minutes are up; every attempt is in the audit log.
+
+**Back up the pepper file together with `state.db`.** Without the pepper,
+no password can be checked. If it is lost, create a new pepper and give
+everyone a new password with `as2d -reset-password <username>`, which also
+works for an admin who is locked out.
+
+**Rotating the pepper:** generate a new file, set it as
+`password_pepper_file`, and list the old one under `previous_pepper_files`.
+Each user moves to the new pepper the next time they sign in. Once everyone
+has, remove the old file from the list.
 
 ## Local testing
 

@@ -135,7 +135,7 @@ func TestLoginAndCSRF(t *testing.T) {
 	// A forged cookie is rejected.
 	forged := &http.Client{}
 	req, _ = http.NewRequest(http.MethodGet, s.URL+"/api/partners", nil)
-	req.AddCookie(&http.Cookie{Name: cookieName, Value: "9999999999.deadbeef"})
+	req.AddCookie(&http.Cookie{Name: tokenCookie, Value: "9999999999.deadbeef"})
 	if resp, _ := forged.Do(req); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("forged cookie: %d", resp.StatusCode)
 	}

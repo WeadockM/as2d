@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/WeadockM/as2d/internal/accounts"
 	"github.com/WeadockM/as2d/internal/archive"
 	"github.com/WeadockM/as2d/internal/as2"
 	"github.com/WeadockM/as2d/internal/cli"
@@ -33,10 +34,25 @@ import (
 func main() {
 	configPath := flag.String("config", cli.DefaultConfigPath(), "path to the configuration file")
 	reindex := flag.Bool("reindex", false, "rebuild the message index from the archive, then exit")
+	createAdmin := flag.String("create-admin", "", "create a dashboard admin with this username, print a one-time password, then exit")
+	resetPassword := flag.String("reset-password", "", "give this dashboard user a new one-time password, then exit")
+	generatePepper := flag.Bool("generate-pepper", false, "print a new random password pepper, then exit")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
-	if *showVersion {
+	switch {
+	case *showVersion:
 		fmt.Println("as2d", version.String())
+		return
+	case *generatePepper:
+		fmt.Println(accounts.GeneratePepper())
+		return
+	case *createAdmin != "" || *resetPassword != "":
+		if err := accountCommand(*configPath, *createAdmin, *resetPassword); err != nil {
+			fmt.Fprintln(os.Stderr, "as2d:", err)
+			cli.Hold()
+			os.Exit(1)
+		}
+		cli.Hold()
 		return
 	}
 
@@ -76,6 +92,20 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 	store := &archive.Store{Root: cfg.ArchiveDir, Index: idx, OnIndexError: func(dir string, err error) {
 		log.Error("failed to index archived message; run as2d -reindex to repair", "dir", dir, "err", err)
 	}}
+
+	users, err := openAccounts(cfg)
+	if err != nil {
+		return err
+	}
+	if users != nil {
+		defer users.Store.Close()
+		n, _ := users.Store.CountUsers()
+		if n == 0 {
+			log.Warn("user accounts are configured but none exist yet; until then the dashboard signs in with api_token. Create the first admin with: as2d -create-admin <username>")
+		} else {
+			log.Info("user accounts enabled", "users", n, "db", cfg.StateDB())
+		}
+	}
 
 	srv := server.New(&as2.Receiver{Local: local, Partners: partners}, store, log, cfg.MaxBodyBytes)
 	srv.InboxDir = cfg.InboxDir
@@ -154,7 +184,7 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 		}
 		h := web.Handler(web.Config{
 			Index: idx, Queue: mgr, Local: local, Partners: webPartners,
-			Token: cfg.APIToken, Secure: cfg.APITLSCert != "", MaxBody: cfg.MaxBodyBytes, Log: log.With("component", "web"),
+			Token: cfg.APIToken, Accounts: users, Secure: cfg.APITLSCert != "", MaxBody: cfg.MaxBodyBytes, Log: log.With("component", "web"),
 		})
 		// The write timeout must outlast the longest wait= a caller can ask for.
 		serve("api", cfg.APIListen, h, cfg.APITLSCert, cfg.APITLSKey, outbound.MaxWait+time.Minute)
@@ -185,6 +215,64 @@ func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 	stopOutbound()
 	background.Wait()
 	return errors.Join(append(errs, runErr)...)
+}
+
+// openAccounts opens the user account database, if accounts are configured.
+func openAccounts(cfg *config.Config) (*accounts.Service, error) {
+	if cfg.PasswordPepperFile == "" {
+		return nil, nil
+	}
+	peppers, err := accounts.LoadPeppers(cfg.PasswordPepperFile, cfg.PreviousPepperFiles)
+	if err != nil {
+		return nil, err
+	}
+	store, err := accounts.Open(cfg.StateDB())
+	if err != nil {
+		return nil, err
+	}
+	return accounts.NewService(store, peppers), nil
+}
+
+// accountCommand runs -create-admin or -reset-password and prints the
+// one-time password.
+func accountCommand(configPath, createAdmin, resetPassword string) error {
+	if os.Geteuid() == 0 {
+		return errors.New("don't run this as root: the account database must stay owned by the daemon's user. " +
+			"Run it as that user instead, e.g. sudo -u as2d as2d -config " + configPath + " ...")
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.PasswordPepperFile == "" {
+		return errors.New("user accounts are not configured: set password_pepper_file and state_dir in " + configPath)
+	}
+	svc, err := openAccounts(cfg)
+	if err != nil {
+		return err
+	}
+	defer svc.Store.Close()
+
+	var name, temp string
+	if createAdmin != "" {
+		name = createAdmin
+		temp, err = svc.CreateUser("cli", createAdmin, accounts.Admin, "")
+		if err == nil {
+			fmt.Printf("Created admin %q.\n", name)
+		}
+	} else {
+		name = resetPassword
+		temp, err = svc.ResetPassword("cli", resetPassword, "")
+		if err == nil {
+			fmt.Printf("Reset the password for %q and signed them out everywhere.\n", name)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("One-time password: %s\n\n", temp)
+	fmt.Printf("Sign in to the dashboard as %s with it; you will be asked to choose a new password.\n", name)
+	return nil
 }
 
 // openIndex opens the message index, rebuilding it from the archive when it

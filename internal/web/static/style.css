@@ -65,6 +65,9 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 }
 .topbar nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .topbar nav a.active { color: var(--text); background: var(--surface-2); }
+.account { display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; }
+.account #whoami { color: var(--muted); font-weight: 550; padding: 6px 8px; border-radius: 6px; }
+.account #whoami:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-left: 2px; vertical-align: 1px; }
 .dot.warn { background: var(--warn); }
 
@@ -171,9 +174,20 @@ details summary { cursor: pointer; color: var(--muted); font-weight: 550; }
 /* Forms */
 .form { max-width: 620px; }
 .form .field { margin-bottom: 16px; }
-.form input[type=text], .form select { width: 100%; }
+.form input[type=text], .form input[type=password], .form select { width: 100%; }
+table.middle td { vertical-align: middle; }
 .check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .result { margin-top: 20px; }
+
+/* One-time passwords and roles */
+.secret-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+code.secret {
+  font-family: var(--mono); font-size: 16px; letter-spacing: .04em; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+  user-select: all;
+}
+.role-help { margin: 0; padding-left: 18px; }
+.role-help li + li { margin-top: 2px; }
 
 /* Login */
 .login { max-width: 380px; margin: 10vh auto 0; }

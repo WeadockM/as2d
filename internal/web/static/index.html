@@ -19,9 +19,14 @@
       <a href="#/messages" data-route="messages">Messages</a>
       <a href="#/queue" data-route="queue" data-needs-queue>Queue</a>
       <a href="#/partners" data-route="partners">Partners <span class="dot" id="cert-dot" hidden></span></a>
-      <a href="#/send" data-route="send" data-needs-queue>Send</a>
+      <a href="#/send" data-route="send" data-needs-queue data-needs-role="operator">Send</a>
+      <a href="#/users" data-route="users" data-needs-accounts data-needs-role="admin">Users</a>
+      <a href="#/audit" data-route="audit" data-needs-accounts data-needs-role="admin">Audit log</a>
     </nav>
-    <button class="link" id="logout" hidden>Log out</button>
+    <div class="account">
+      <a href="#/account" id="whoami" hidden></a>
+      <button class="link" id="logout" hidden>Sign out</button>
+    </div>
   </header>
   <main id="app" aria-live="polite"></main>
 </body>

@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -22,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/WeadockM/as2d/internal/accounts"
 	"github.com/WeadockM/as2d/internal/as2"
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/index"
@@ -45,8 +45,9 @@ type Config struct {
 	Queue    *outbound.Manager // nil when nothing is sent or forwarded
 	Local    as2.Station
 	Partners []Partner
-	Token    string // empty: no login (loopback only; enforced by the caller)
-	Secure   bool   // served over TLS; marks the session cookie Secure
+	Token    string            // empty: no token (loopback only; enforced by the caller)
+	Accounts *accounts.Service // nil when user accounts are not configured
+	Secure   bool              // served over TLS; marks session cookies Secure
 	MaxBody  int64
 	Log      *slog.Logger
 }
@@ -54,25 +55,46 @@ type Config struct {
 // Handler returns the dashboard and its API, including the outbound API
 // when there is a queue.
 func Handler(cfg Config) http.Handler {
-	s := &site{cfg: cfg, auth: newAuth(cfg.Token, cfg.Secure)}
-	api := http.NewServeMux()
-	api.HandleFunc("GET /api/archive/messages", s.listMessages)
-	api.HandleFunc("GET /api/archive/messages/{id}", s.getMessage)
-	api.HandleFunc("GET /api/archive/messages/{id}/files/{file...}", s.getFile)
-	api.HandleFunc("GET /api/partners", s.partners)
-	api.HandleFunc("GET /api/certs/local.pem", s.localCert)
-	api.HandleFunc("GET /api/certs/partners/{id}", s.partnerCert)
-	if cfg.Queue != nil {
-		q := cfg.Queue.APIHandler("", cfg.MaxBody) // authentication happens here, not in it
-		api.Handle("/api/messages", q)
-		api.Handle("/api/messages/", q)
+	s := &site{cfg: cfg, auth: &auth{token: cfg.Token, secure: cfg.Secure, accounts: cfg.Accounts}}
+	mux := http.NewServeMux()
+	route := func(pattern string, min accounts.Role, h http.HandlerFunc) {
+		mux.Handle(pattern, s.auth.require(min, h))
 	}
 
-	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/session", s.session)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
-	mux.Handle("/api/", s.auth.require(api))
+	route("POST /api/account/password", accounts.Viewer, s.changePassword)
+
+	route("GET /api/archive/messages", accounts.Viewer, s.listMessages)
+	route("GET /api/archive/messages/{id}", accounts.Viewer, s.getMessage)
+	route("GET /api/archive/messages/{id}/files/{file...}", accounts.Viewer, s.getFile)
+	route("GET /api/partners", accounts.Viewer, s.partners)
+	route("GET /api/certs/local.pem", accounts.Viewer, s.localCert)
+	route("GET /api/certs/partners/{id}", accounts.Viewer, s.partnerCert)
+
+	route("GET /api/users", accounts.Admin, s.listUsers)
+	route("POST /api/users", accounts.Admin, s.createUser)
+	route("PATCH /api/users/{username}", accounts.Admin, s.updateUser)
+	route("POST /api/users/{username}/reset-password", accounts.Admin, s.resetPassword)
+	route("GET /api/audit", accounts.Admin, s.audit)
+
+	if cfg.Queue != nil {
+		// Reading the queue is for viewers; sending and retrying for operators.
+		q := s.auth.requireFunc(func(r *http.Request) accounts.Role {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				return accounts.Viewer
+			}
+			return accounts.Operator
+		}, s.auditQueue(cfg.Queue.APIHandler("", cfg.MaxBody)))
+		mux.Handle("/api/messages", q)
+		mux.Handle("/api/messages/", q)
+	}
+	// Anything else under /api/ is checked like the rest, then not found.
+	route("/api/", accounts.Viewer, func(w http.ResponseWriter, r *http.Request) {
+		apiError(w, http.StatusNotFound, "no such endpoint")
+	})
+
 	sub, _ := fs.Sub(static, "static")
 	mux.Handle("/", http.FileServerFS(sub))
 	return securityHeaders(mux)
@@ -97,12 +119,25 @@ func securityHeaders(h http.Handler) http.Handler {
 }
 
 func (s *site) session(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"auth_required":   s.auth.token != "",
-		"authenticated":   s.auth.ok(r),
-		"local_id":        s.cfg.Local.ID,
-		"sending_enabled": s.cfg.Queue != nil,
-	})
+	mode := s.auth.mode()
+	resp := map[string]any{
+		"auth_mode":          mode, // users, token or open
+		"auth_required":      mode != "open",
+		"accounts_available": s.auth.accounts != nil,
+		"local_id":           s.cfg.Local.ID,
+		"sending_enabled":    s.cfg.Queue != nil,
+	}
+	p, ok := s.auth.authenticate(r)
+	resp["authenticated"] = ok
+	if ok {
+		resp["role"] = p.Role
+		if p.User != nil {
+			resp["user"] = map[string]any{
+				"username": p.User.Username, "role": p.User.Role, "must_change_password": p.User.MustChangePassword,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *site) listMessages(w http.ResponseWriter, r *http.Request) {
@@ -351,5 +386,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func apiError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
-
-var errBadLogin = errors.New("wrong token")

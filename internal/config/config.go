@@ -35,6 +35,12 @@ type Config struct {
 	APITLSCert string `json:"api_tls_cert,omitempty"`
 	APITLSKey  string `json:"api_tls_key,omitempty"`
 
+	// Dashboard user accounts. Setting password_pepper_file turns them on;
+	// users live in <state_dir>/state.db.
+	StateDir            string   `json:"state_dir,omitempty"`
+	PasswordPepperFile  string   `json:"password_pepper_file,omitempty"`
+	PreviousPepperFiles []string `json:"previous_pepper_files,omitempty"` // still accepted while users move to the new pepper
+
 	// StatusWebhook is told when each message to a partner is delivered or failed.
 	StatusWebhook *Webhook `json:"status_webhook,omitempty"`
 
@@ -185,7 +191,10 @@ func Load(path string) (*Config, error) {
 
 	base := filepath.Dir(path)
 	paths := []*string{&c.TLSCert, &c.TLSKey, &c.APITLSCert, &c.APITLSKey, &c.ArchiveDir, &c.IndexDB, &c.InboxDir,
-		&c.OutboxDir, &c.SpoolDir, &c.Local.Cert, &c.Local.Key}
+		&c.OutboxDir, &c.SpoolDir, &c.StateDir, &c.PasswordPepperFile, &c.Local.Cert, &c.Local.Key}
+	for i := range c.PreviousPepperFiles {
+		paths = append(paths, &c.PreviousPepperFiles[i])
+	}
 	if w := c.StatusWebhook; w != nil {
 		paths = append(paths, &w.PasswordFile, &w.BearerTokenFile, &w.CAFile)
 		if w.Timeout.Duration == 0 {
@@ -218,6 +227,9 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
+// StateDB is the user account database.
+func (c *Config) StateDB() string { return filepath.Join(c.StateDir, "state.db") }
+
 // NeedsQueue reports whether the outbound queue is needed: some partner is
 // sent to, or forwards in queued mode.
 func (c *Config) NeedsQueue() bool {
@@ -236,6 +248,12 @@ func (c *Config) validate() error {
 	}
 	if (c.APITLSCert == "") != (c.APITLSKey == "") {
 		errs = append(errs, errors.New("api_tls_cert and api_tls_key must be set together"))
+	}
+	if c.PasswordPepperFile != "" && c.StateDir == "" {
+		errs = append(errs, errors.New("password_pepper_file needs state_dir, where user accounts are kept"))
+	}
+	if len(c.PreviousPepperFiles) > 0 && c.PasswordPepperFile == "" {
+		errs = append(errs, errors.New("previous_pepper_files needs password_pepper_file"))
 	}
 	if w := c.StatusWebhook; w != nil {
 		if w.URL == "" {

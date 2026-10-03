@@ -7,6 +7,32 @@ change configuration or APIs; any such change is called out below.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-03
+
+### Added
+- Dashboard user accounts with three roles: **viewer** (read only),
+  **operator** (also retry and send) and **admin** (also users and audit
+  log). Turned on by `password_pepper_file` and `state_dir`; without them
+  the dashboard signs in with `api_token` as before.
+- Passwords are hashed with Argon2id after being combined with a secret
+  pepper kept in its own file. Peppers can be rotated with
+  `previous_pepper_files`.
+- **Users** page for admins: add users (each gets a one-time password),
+  change roles, reset passwords, disable accounts. Disabling or resetting
+  signs the user out at once. The last active admin can't be demoted or
+  disabled.
+- **Audit log** page: sign-ins, failed sign-ins, password changes, user
+  changes, and files sent or messages retried from the dashboard.
+- Sign-in throttling: 5 wrong passwords for an account (or 20 from one
+  address) in 15 minutes block further attempts for the rest of that window.
+- `as2d -create-admin <name>`, `-reset-password <name>` and
+  `-generate-pepper`.
+
+### Changed
+- Once user accounts exist, `api_token` no longer signs in to the
+  dashboard. It still works for scripts and Boomi as a bearer token, with
+  operator rights.
+
 ### Fixed
 - Release pages include the notes from this changelog. The v0.2.2 release
   was published without them because of a release configuration mistake.
@@ -77,7 +103,8 @@ First release.
   Services Server listener, in `queued` or `before_mdn` mode.
 - `as2send` for one-off test sends, and `as2keygen` for certificates.
 
-[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/WeadockM/as2d/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/WeadockM/as2d/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/WeadockM/as2d/compare/v0.2.0...v0.2.2
 [0.2.0]: https://github.com/WeadockM/as2d/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/WeadockM/as2d/releases/tag/v0.1.0

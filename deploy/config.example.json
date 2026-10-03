@@ -6,6 +6,9 @@
   "archive_dir": "/var/lib/as2d/archive",
   "spool_dir": "/var/lib/as2d/spool",
 
+  "state_dir": "/var/lib/as2d/state",
+  "password_pepper_file": "pepper.key",
+
   "api_listen": "0.0.0.0:4090",
   "api_token": "replace-with-a-long-random-token",
   "api_tls_cert": "certs/api.crt",
