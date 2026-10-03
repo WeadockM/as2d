@@ -13,6 +13,8 @@ A small AS2 (RFC 4130) daemon for Linux that both receives and sends.
 - **Integration:** received payloads can be forwarded to an HTTP endpoint
   such as a Boomi Web Services Server listener, and senders can wait for the
   partner's MDN in a single API call or receive it via a status webhook.
+- **Dashboard:** a built-in web UI to search messages, inspect and retry
+  failures, check partner certificates and send files.
 
 It is a single static binary with no runtime dependencies, configured with
 one JSON file. Supported: SHA-1/256/384/512 signatures and MICs,
@@ -70,6 +72,7 @@ are resolved against the config file's directory.
 | `tls_cert`, `tls_key` | Serve HTTPS directly |
 | `public_url` | This endpoint as partners reach it; sent as the address for async MDNs |
 | `archive_dir` | Permanent record of every message in and out (required) |
+| `index_db` | SQLite index of the archive (default `<archive_dir>/as2d.db`); see [Archive layout](#archive-layout) |
 | `inbox_dir` | Received payloads are delivered to `<inbox_dir>/<partner>/` |
 | `outbox_dir` | Files dropped into `<outbox_dir>/<partner>/` are sent |
 | `spool_dir` | Outbound queue (required when any partner has `outbound`) |
@@ -240,6 +243,46 @@ Status JSON (API responses and webhook):
     mdn.http          the MDN
     meta.json         summary: security, MIC, disposition, errors, attempts
 ```
+
+The files are the permanent record. A SQLite index (`index_db`, default
+`<archive_dir>/as2d.db`) makes them searchable for the dashboard and records
+processed Message-IDs for duplicate detection. Every row comes from a
+`meta.json`, so the index can always be rebuilt from the archive:
+
+```sh
+sudo systemctl stop as2d
+sudo -u as2d as2d -config /etc/as2d/config.json -reindex
+sudo systemctl start as2d
+```
+
+The daemon also rebuilds it by itself on startup when the database is missing
+or from an older version. The SQLite driver is pure Go, so the binary still
+needs no C libraries. Keep the index on local disk, not a network share.
+
+## Dashboard
+
+When `api_listen` is set, the same port serves a browser dashboard, e.g.
+`http://127.0.0.1:4090/`:
+
+- **Messages:** everything received and sent, newest first. Search by file
+  name, Message-ID, subject or correlation ID, and filter by direction,
+  partner, state and date.
+- **Message detail:** security applied, the MDN result, errors, forward
+  status, and downloads of the payload, raw request, MDN and `meta.json`.
+  Failed sends and forwards can be retried from here.
+- **Queue:** sends and forwards in progress, with their retries, and the
+  failed ones.
+- **Partners:** your station and each partner's settings and certificate,
+  with warnings 30 days before a certificate expires. Certificates can be
+  downloaded, e.g. to send yours to a new partner.
+- **Send:** send a file to a partner through the queue, and optionally wait
+  for the MDN.
+
+Sign in with the `api_token`. Scripts can keep using
+`Authorization: Bearer <token>`. Without a token, which is only allowed when
+the API listens on loopback, the dashboard is open to anyone who can reach
+that port. The dashboard is self-contained: it loads nothing from the
+internet. Expiring certificates are also logged when the daemon starts.
 
 ## Local testing
 

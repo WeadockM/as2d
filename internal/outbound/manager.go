@@ -325,7 +325,7 @@ func (m *Manager) SubmitForward(partner string, msg forward.Message, inboundDir 
 	j.Inbound = &InboundRef{From: msg.From, To: msg.To, MessageID: msg.MessageID, ArchiveDir: inboundDir}
 	// Record the queued state before any worker can pick the job up, so
 	// the worker's final record always lands last.
-	before := func() error { return archive.UpdateMeta(inboundDir, "forward", forwardRecord(j)) }
+	before := func() error { return m.cfg.Archive.UpdateMeta(inboundDir, "forward", forwardRecord(j)) }
 	if err := m.enqueue(j, msg.Payload, before); err != nil {
 		return Job{}, err
 	}
@@ -883,7 +883,11 @@ func (m *Manager) release(j *Job) {
 // retryLater schedules another attempt, or fails the job once attempts run out.
 func (m *Manager) retryLater(j *Job, cause error) {
 	if j.Attempts >= m.cfg.MaxAttempts {
-		m.finish(j, Failed, fmt.Sprintf("giving up after %d attempts: %v", j.Attempts, cause), nil)
+		attempts := "attempts"
+		if j.Attempts == 1 {
+			attempts = "attempt"
+		}
+		m.finish(j, Failed, fmt.Sprintf("giving up after %d %s: %v", j.Attempts, attempts, cause), nil)
 		return
 	}
 	delay := m.cfg.Backoff(max(j.Attempts, 1))
@@ -929,7 +933,7 @@ func (m *Manager) finishForward(j *Job, state State, reason string) {
 	m.mu.Lock()
 	rec := forwardRecord(j)
 	m.mu.Unlock()
-	if err := archive.UpdateMeta(j.Inbound.ArchiveDir, "forward", rec); err != nil {
+	if err := m.cfg.Archive.UpdateMeta(j.Inbound.ArchiveDir, "forward", rec); err != nil {
 		m.cfg.Log.Error("failed to record forward result in meta.json", "job", j.ID, "err", err)
 	}
 	if state == Delivered {

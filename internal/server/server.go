@@ -185,7 +185,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				rec["error"] = err.Error()
 			}
-			if merr := archive.UpdateMeta(dir, "forward", rec); merr != nil {
+			if merr := s.Archive.UpdateMeta(dir, "forward", rec); merr != nil {
 				s.Log.Warn("failed to record forward result", "message_id", msg.ID, "err", merr)
 			}
 			if err != nil {

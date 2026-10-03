@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// The index records which Message-IDs were processed successfully, so
-// duplicates can be recognized. Each entry is a small file holding the
-// archive directory of the original message.
+// Which Message-IDs were processed successfully is recorded so duplicates
+// can be recognized: in the Index when there is one, otherwise as small
+// files holding the archive directory of the original message.
 
-func (s *Store) indexPath(direction, partner, messageID string) string {
+func (s *Store) seenPath(direction, partner, messageID string) string {
 	sum := sha256.Sum256([]byte(messageID))
 	return filepath.Join(s.Root, ".index", direction, SafeName(partner), hex.EncodeToString(sum[:]))
 }
@@ -24,7 +24,10 @@ func (s *Store) indexPath(direction, partner, messageID string) string {
 // Seen returns the archive directory of an earlier, successfully processed
 // message with this ID from partner.
 func (s *Store) Seen(direction, partner, messageID string) (string, bool) {
-	b, err := os.ReadFile(s.indexPath(direction, partner, messageID))
+	if s.Index != nil {
+		return s.Index.Seen(direction, partner, messageID)
+	}
+	b, err := os.ReadFile(s.seenPath(direction, partner, messageID))
 	if err != nil {
 		return "", false
 	}
@@ -33,7 +36,10 @@ func (s *Store) Seen(direction, partner, messageID string) (string, bool) {
 
 // MarkSeen records messageID as processed, archived at dir.
 func (s *Store) MarkSeen(direction, partner, messageID, dir string) error {
-	p := s.indexPath(direction, partner, messageID)
+	if s.Index != nil {
+		return s.Index.MarkSeen(direction, partner, messageID, dir)
+	}
+	p := s.seenPath(direction, partner, messageID)
 	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return err
 	}
@@ -103,8 +109,18 @@ func writeFileAtomic(path string, data []byte) error {
 }
 
 // UpdateMeta sets one top-level key in a message's meta.json, e.g. to
-// record what happened after the message was archived.
-func UpdateMeta(dir, key string, value any) error {
+// record what happened after the message was archived, and re-indexes it.
+func (s *Store) UpdateMeta(dir, key string, value any) error {
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	if err := updateMeta(dir, key, value); err != nil {
+		return err
+	}
+	s.index(dir)
+	return nil
+}
+
+func updateMeta(dir, key string, value any) error {
 	path := filepath.Join(dir, "meta.json")
 	var meta map[string]any
 	b, err := os.ReadFile(path)

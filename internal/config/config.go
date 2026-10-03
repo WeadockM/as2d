@@ -23,6 +23,7 @@ type Config struct {
 	MaxBodyBytes int64  `json:"max_body_bytes"`       // default 100 MiB
 
 	ArchiveDir string `json:"archive_dir"`
+	IndexDB    string `json:"index_db,omitempty"`   // SQLite index of the archive; default <archive_dir>/as2d.db
 	InboxDir   string `json:"inbox_dir,omitempty"`  // received payloads are delivered here, per partner
 	OutboxDir  string `json:"outbox_dir,omitempty"` // files dropped here, per partner, are sent
 	SpoolDir   string `json:"spool_dir,omitempty"`  // outbound queue; required to send
@@ -183,7 +184,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	base := filepath.Dir(path)
-	paths := []*string{&c.TLSCert, &c.TLSKey, &c.APITLSCert, &c.APITLSKey, &c.ArchiveDir, &c.InboxDir,
+	paths := []*string{&c.TLSCert, &c.TLSKey, &c.APITLSCert, &c.APITLSKey, &c.ArchiveDir, &c.IndexDB, &c.InboxDir,
 		&c.OutboxDir, &c.SpoolDir, &c.Local.Cert, &c.Local.Key}
 	if w := c.StatusWebhook; w != nil {
 		paths = append(paths, &w.PasswordFile, &w.BearerTokenFile, &w.CAFile)
@@ -206,6 +207,9 @@ func Load(path string) (*Config, error) {
 	}
 	for _, p := range paths {
 		*p = resolve(base, *p)
+	}
+	if c.IndexDB == "" && c.ArchiveDir != "" {
+		c.IndexDB = filepath.Join(c.ArchiveDir, "as2d.db")
 	}
 
 	if err := c.validate(); err != nil {

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,23 +22,26 @@ import (
 	"github.com/WeadockM/as2d/internal/as2"
 	"github.com/WeadockM/as2d/internal/config"
 	"github.com/WeadockM/as2d/internal/forward"
+	"github.com/WeadockM/as2d/internal/index"
 	"github.com/WeadockM/as2d/internal/outbound"
 	"github.com/WeadockM/as2d/internal/server"
+	"github.com/WeadockM/as2d/internal/web"
 )
 
 func main() {
 	configPath := flag.String("config", "/etc/as2d/config.json", "path to the configuration file")
+	reindex := flag.Bool("reindex", false, "rebuild the message index from the archive, then exit")
 	flag.Parse()
 
 	// systemd's journal records timestamps, and stderr is where it reads from.
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(*configPath, log); err != nil {
+	if err := run(*configPath, *reindex, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(configPath string, log *slog.Logger) error {
+func run(configPath string, reindexOnly bool, log *slog.Logger) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -45,14 +49,23 @@ func run(configPath string, log *slog.Logger) error {
 	if cfg.ArchiveDir == "" {
 		return fmt.Errorf("%s: archive_dir is required", configPath)
 	}
+	if err := os.MkdirAll(cfg.ArchiveDir, 0o750); err != nil {
+		return err
+	}
+	idx, err := openIndex(cfg, reindexOnly, log)
+	if err != nil || reindexOnly {
+		return err
+	}
+	defer idx.Close()
+
 	local, partners, err := cfg.Stations()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(cfg.ArchiveDir, 0o750); err != nil {
-		return err
-	}
-	store := &archive.Store{Root: cfg.ArchiveDir}
+	warnCertificates(cfg, local, partners, log)
+	store := &archive.Store{Root: cfg.ArchiveDir, Index: idx, OnIndexError: func(dir string, err error) {
+		log.Error("failed to index archived message; run as2d -reindex to repair", "dir", dir, "err", err)
+	}}
 
 	srv := server.New(&as2.Receiver{Local: local, Partners: partners}, store, log, cfg.MaxBodyBytes)
 	srv.InboxDir = cfg.InboxDir
@@ -98,9 +111,9 @@ func run(configPath string, log *slog.Logger) error {
 	}
 	srv.Forwards = forwards
 
+	var mgr *outbound.Manager
 	if cfg.NeedsQueue() {
-		mgr, err := newOutbound(cfg, local, partners, store, queued, log)
-		if err != nil {
+		if mgr, err = newOutbound(cfg, local, partners, store, queued, log); err != nil {
 			return err
 		}
 		srv.MDNs = mgr
@@ -109,21 +122,32 @@ func run(configPath string, log *slog.Logger) error {
 		if cfg.OutboxDir != "" {
 			background.Go(func() { mgr.WatchOutbox(outCtx, cfg.OutboxDir, 2*time.Second) })
 		}
-		if cfg.APIListen != "" {
-			host, _, _ := net.SplitHostPort(cfg.APIListen)
-			if !isLoopback(host) {
-				if cfg.APIToken == "" {
-					return fmt.Errorf("api_listen %s is not a loopback address; set api_token", cfg.APIListen)
-				}
-				if cfg.APITLSCert == "" {
-					log.Warn("the API is reachable from the network without TLS; the token travels in clear text",
-						"api_listen", cfg.APIListen)
-				}
+	}
+
+	// The API listener serves the dashboard, archive and partner views, and
+	// the outbound API when there is a queue.
+	if cfg.APIListen != "" {
+		host, _, _ := net.SplitHostPort(cfg.APIListen)
+		if !isLoopback(host) {
+			if cfg.APIToken == "" {
+				return fmt.Errorf("api_listen %s is not a loopback address; set api_token", cfg.APIListen)
 			}
-			// The write timeout must outlast the longest wait= a caller can ask for.
-			serve("api", cfg.APIListen, mgr.APIHandler(cfg.APIToken, cfg.MaxBodyBytes),
-				cfg.APITLSCert, cfg.APITLSKey, outbound.MaxWait+time.Minute)
+			if cfg.APITLSCert == "" {
+				log.Warn("the API is reachable from the network without TLS; the token travels in clear text",
+					"api_listen", cfg.APIListen)
+			}
 		}
+		var webPartners []web.Partner
+		for i := range cfg.Partners {
+			p := &cfg.Partners[i]
+			webPartners = append(webPartners, web.Partner{Config: p, Cert: partners[p.AS2ID].Cert})
+		}
+		h := web.Handler(web.Config{
+			Index: idx, Queue: mgr, Local: local, Partners: webPartners,
+			Token: cfg.APIToken, Secure: cfg.APITLSCert != "", MaxBody: cfg.MaxBodyBytes, Log: log.With("component", "web"),
+		})
+		// The write timeout must outlast the longest wait= a caller can ask for.
+		serve("api", cfg.APIListen, h, cfg.APITLSCert, cfg.APITLSKey, outbound.MaxWait+time.Minute)
 	}
 
 	mux := http.NewServeMux()
@@ -151,6 +175,45 @@ func run(configPath string, log *slog.Logger) error {
 	stopOutbound()
 	background.Wait()
 	return errors.Join(append(errs, runErr)...)
+}
+
+// openIndex opens the message index, rebuilding it from the archive when it
+// is new or its format changed, or when asked to.
+func openIndex(cfg *config.Config, rebuild bool, log *slog.Logger) (*index.DB, error) {
+	idx, fresh, err := index.Open(cfg.IndexDB, cfg.ArchiveDir)
+	if err != nil {
+		return nil, err
+	}
+	if fresh || rebuild {
+		start := time.Now()
+		n, err := idx.Reindex()
+		if err != nil {
+			idx.Close()
+			return nil, fmt.Errorf("rebuilding the index: %w", err)
+		}
+		log.Info("index rebuilt from the archive", "messages", n, "db", cfg.IndexDB, "took", time.Since(start).Round(time.Millisecond))
+	}
+	if rebuild {
+		return nil, idx.Close()
+	}
+	return idx, nil
+}
+
+// warnCertificates logs certificates that have expired or expire soon.
+func warnCertificates(cfg *config.Config, local as2.Station, partners map[string]*as2.Partner, log *slog.Logger) {
+	check := func(owner string, c *x509.Certificate) {
+		switch web.CertStatus(c, time.Now()) {
+		case "expired":
+			log.Error("certificate has expired or is not yet valid", "owner", owner, "not_after", c.NotAfter)
+		case "expiring":
+			log.Warn("certificate expires soon", "owner", owner, "not_after", c.NotAfter,
+				"days_left", int(time.Until(c.NotAfter).Hours()/24))
+		}
+	}
+	check("local station "+local.ID, local.Cert)
+	for _, p := range cfg.Partners {
+		check("partner "+p.AS2ID, partners[p.AS2ID].Cert)
+	}
 }
 
 // newForwards builds each partner's forward endpoint. It returns the rules

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>as2d</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/messages">
+      <img src="favicon.svg" alt="" width="22" height="22">
+      <span>as2d</span>
+      <span class="station" id="station"></span>
+    </a>
+    <nav id="nav" hidden>
+      <a href="#/messages" data-route="messages">Messages</a>
+      <a href="#/queue" data-route="queue" data-needs-queue>Queue</a>
+      <a href="#/partners" data-route="partners">Partners <span class="dot" id="cert-dot" hidden></span></a>
+      <a href="#/send" data-route="send" data-needs-queue>Send</a>
+    </nav>
+    <button class="link" id="logout" hidden>Log out</button>
+  </header>
+  <main id="app" aria-live="polite"></main>
+</body>
+</html>

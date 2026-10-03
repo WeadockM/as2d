@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/WeadockM/as2d/internal/index"
 )
 
 // Store writes each message to its own directory:
@@ -14,6 +17,24 @@ import (
 //	<Root>/<direction>/<partner>/<yyyy>/<mm>/<dd>/<hhmmss.micros>_<message-id>/
 type Store struct {
 	Root string
+
+	// Index, if set, is kept up to date with every message saved, and holds
+	// the record of processed Message-IDs. Indexing failures do not fail a
+	// save, since the files are the source of truth; they are reported to
+	// OnIndexError and repaired by a reindex.
+	Index        *index.DB
+	OnIndexError func(dir string, err error)
+
+	metaMu sync.Mutex // serializes meta.json read-modify-writes
+}
+
+func (s *Store) index(dir string) {
+	if s.Index == nil {
+		return
+	}
+	if err := s.Index.Add(dir); err != nil && s.OnIndexError != nil {
+		s.OnIndexError(dir, err)
+	}
 }
 
 // Save writes files (keyed by slash-separated relative path) into a new
@@ -56,6 +77,7 @@ func (s *Store) Save(direction, partner, messageID string, t time.Time, files ma
 	}
 	done = true
 	syncDir(parent)
+	s.index(dest)
 	return dest, nil
 }
 
